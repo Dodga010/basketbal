@@ -48,8 +48,8 @@ def fetch_team_data():
     conn.close()
     return df
     
-def fetch_team_shots(selected_team):
-    """Fetch all shots for the selected team."""
+def fetch_player_team_shots(player_name, team_name):
+    """Fetch all shots for the selected player and team."""
     if not table_exists("Shots"):
         st.error("⚠️ 'Shots' table not found!")
         return pd.DataFrame()
@@ -58,9 +58,9 @@ def fetch_team_shots(selected_team):
     query = """
     SELECT x_coord, y_coord, shot_result
     FROM Shots
-    WHERE team_id = (SELECT team_id FROM Teams WHERE name = ? LIMIT 1);
+    WHERE player_name = ? AND team_id = (SELECT team_id FROM Teams WHERE name = ? LIMIT 1);
     """
-    df = pd.read_sql(query, conn, params=(selected_team,))
+    df = pd.read_sql(query, conn, params=(player_name, team_name))
     conn.close()
     
     return df
@@ -116,33 +116,39 @@ def fetch_players():
     return players
 
 # ✅ Generate Shot Chart
-def generate_team_shot_chart(team_name):
-    """Generate a shot chart for the selected team."""
-    df_shots = fetch_team_shots(team_name)
+def generate_shot_chart(player_name, team_name):
+    """Generate a shot chart with heatmap restricted within the court boundaries for a player and team."""
 
-    if df_shots.empty:
-        st.warning(f"❌ No shot data found for {team_name}.")
+    if not os.path.exists("fiba_courtonly.jpg"):
+        st.error("⚠️ Court image file 'fiba_courtonly.jpg' is missing!")
         return
 
-    # ✅ Scale coordinates to match court image
-    df_shots["x_coord"] *= 2.8  
+    df_shots = fetch_player_team_shots(player_name, team_name)
+
+    if df_shots.empty:
+        st.warning(f"❌ No shot data found for {player_name} in {team_name}.")
+        return
+
+    # Scale coordinates to match court image dimensions
+    df_shots["x_coord"] = df_shots["x_coord"] * 2.8  
     df_shots["y_coord"] = 261 - (df_shots["y_coord"] * 2.61)
 
-    # ✅ Load court image
+    # Load court image
     court_img = mpimg.imread("fiba_courtonly.jpg")
 
-    # ✅ Create figure
+    # Create figure
     fig, ax = plt.subplots(figsize=(8, 6))
     ax.imshow(court_img, extent=[0, 280, 0, 261], aspect="auto")
 
-    # ✅ Heatmap for shooting tendencies
+    # Heatmap (restrict to court area)
     sns.kdeplot(
-        data=df_shots, x="x_coord", y="y_coord", 
+        data=df_shots, 
+        x="x_coord", y="y_coord", 
         cmap="coolwarm", fill=True, alpha=0.5, ax=ax, 
         bw_adjust=0.5, clip=[[0, 280], [0, 261]]
     )
 
-    # ✅ Plot individual shots
+    # Plot individual shots
     made_shots = df_shots[df_shots["shot_result"] == 1]
     missed_shots = df_shots[df_shots["shot_result"] == 0]
 
@@ -152,12 +158,14 @@ def generate_team_shot_chart(team_name):
     ax.scatter(missed_shots["x_coord"], missed_shots["y_coord"], 
                c="red", edgecolors="black", s=35, alpha=1, zorder=3, label="Missed Shots")
 
-    # ✅ Remove axis labels
+    # Remove all axis elements (clean chart)
     ax.set_xticks([])
     ax.set_yticks([])
+    ax.set_xticklabels([])
+    ax.set_yticklabels([])
     ax.axis("off")
 
-    # ✅ Show chart in Streamlit
+    # Display chart in Streamlit
     st.pyplot(fig)
 
 

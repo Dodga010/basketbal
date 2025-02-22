@@ -260,6 +260,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-```
-
-This should resolve the indentation error.

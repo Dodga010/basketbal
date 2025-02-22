@@ -1,6 +1,3 @@
-It looks like there is an indentation error on line 170 of your script. The `if` statement is incorrectly indented. It should align with the previous lines. Here is the corrected version of your script:
-
-```python
 import os
 import sqlite3
 import streamlit as st

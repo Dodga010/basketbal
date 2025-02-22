@@ -201,7 +201,7 @@ def main():
             # ✅ Add team shot chart below the stats graph
             selected_team = st.selectbox("Select a Team", df["Team"].unique())
             st.subheader(f"🎯 {selected_team} Shot Chart")
-            generate_team_shot_chart(selected_team)
+            generate_shot_chart(selected_team)
 
 
     elif page == "Head-to-Head Comparison":
@@ -269,7 +269,7 @@ def main():
             st.warning("No player data available.")
         else:
             player_name = st.selectbox("Select a Player", players)
-            generate_team_shot_chart(player_name)
+            generate_shot_chart(player_name)
 
 if __name__ == "__main__":
     main()

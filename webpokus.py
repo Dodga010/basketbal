@@ -167,7 +167,7 @@ def main():
     # Sidebar navigation
     page = st.sidebar.selectbox("📌 Choose a page", ["Team Season Boxscore", "Head-to-Head Comparison", "Referee Stats", "Shot Chart"])
 
-     if page == "Team Season Boxscore":
+    if page == "Team Season Boxscore":
         df = fetch_team_data()
 
         if df.empty:

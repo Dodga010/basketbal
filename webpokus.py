@@ -47,6 +47,25 @@ def fetch_team_data():
     df = pd.read_sql(query, conn)
     conn.close()
     return df
+    
+def fetch_team_shots(selected_team):
+    """Fetch all shots for the selected team."""
+    if not table_exists("Shots"):
+        st.error("⚠️ 'Shots' table not found!")
+        return pd.DataFrame()
+
+    conn = sqlite3.connect(db_path)
+    query = """
+    SELECT s.x_coord, s.y_coord, s.shot_result
+    FROM Shots s
+    JOIN Teams t ON s.team_id = t.team_id
+    WHERE t.name = ?;
+    """
+    df = pd.read_sql(query, conn, params=(selected_team,))
+    conn.close()
+    
+    return df
+
 
 # ✅ Fetch Assists vs Turnovers
 def fetch_assists_vs_turnovers():
@@ -97,25 +116,49 @@ def fetch_players():
     return players
 
 # ✅ Generate Shot Chart
-def generate_shot_chart(player_name):
-    """Generate a shot chart with heatmap restricted within the court boundaries."""
-
-    if not os.path.exists("fiba_courtonly.jpg"):
-        st.error("⚠️ Court image file 'fiba_courtonly.jpg' is missing!")
-        return
-
-    conn = sqlite3.connect(db_path)
-    query = """
-    SELECT x_coord, y_coord, shot_result
-    FROM Shots 
-    WHERE player_name = ?;
-    """
-    df_shots = pd.read_sql_query(query, conn, params=(player_name,))
-    conn.close()
+def generate_team_shot_chart(team_name):
+    """Generate a shot chart for the selected team."""
+    df_shots = fetch_team_shots(team_name)
 
     if df_shots.empty:
-        st.warning(f"❌ No shot data found for {player_name}.")
+        st.warning(f"❌ No shot data found for {team_name}.")
         return
+
+    # ✅ Scale coordinates to match court image
+    df_shots["x_coord"] *= 2.8  
+    df_shots["y_coord"] = 261 - (df_shots["y_coord"] * 2.61)
+
+    # ✅ Load court image
+    court_img = mpimg.imread("fiba_courtonly.jpg")
+
+    # ✅ Create figure
+    fig, ax = plt.subplots(figsize=(8, 6))
+    ax.imshow(court_img, extent=[0, 280, 0, 261], aspect="auto")
+
+    # ✅ Heatmap for shooting tendencies
+    sns.kdeplot(
+        data=df_shots, x="x_coord", y="y_coord", 
+        cmap="coolwarm", fill=True, alpha=0.5, ax=ax, 
+        bw_adjust=0.5, clip=[[0, 280], [0, 261]]
+    )
+
+    # ✅ Plot individual shots
+    made_shots = df_shots[df_shots["shot_result"] == 1]
+    missed_shots = df_shots[df_shots["shot_result"] == 0]
+
+    ax.scatter(made_shots["x_coord"], made_shots["y_coord"], 
+               c="lime", edgecolors="black", s=35, alpha=1, zorder=3, label="Made Shots")
+
+    ax.scatter(missed_shots["x_coord"], missed_shots["y_coord"], 
+               c="red", edgecolors="black", s=35, alpha=1, zorder=3, label="Missed Shots")
+
+    # ✅ Remove axis labels
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.axis("off")
+
+    # ✅ Show chart in Streamlit
+    st.pyplot(fig)
 
     # ✅ Convert shot_result to match 'made' or 'missed' conditions
     df_shots["shot_result"] = df_shots["shot_result"].astype(str)
@@ -168,26 +211,31 @@ def main():
     page = st.sidebar.selectbox("📌 Choose a page", ["Team Season Boxscore", "Head-to-Head Comparison", "Referee Stats", "Shot Chart"])
 
     if page == "Team Season Boxscore":
-        df = fetch_team_data()
+    df = fetch_team_data()
 
-        if df.empty:
-            st.warning("No team data available.")
-        else:
-            st.subheader("📊 Season Team Statistics (Averages Per Game)")
-            numeric_cols = df.select_dtypes(include=['number']).columns
-            st.dataframe(df.style.format({col: "{:.1f}" for col in numeric_cols}))
+    if df.empty:
+        st.warning("No team data available.")
+    else:
+        st.subheader("📊 Season Team Statistics (Averages Per Game)")
+        numeric_cols = df.select_dtypes(include=['number']).columns
+        st.dataframe(df.style.format({col: "{:.1f}" for col in numeric_cols}))
 
-            # ✅ Dropdown to choose a stat type
-            stat_options = ["Avg_Points", "Avg_Fouls", "Avg_Free_Throws", "Avg_Field_Goals", "Avg_Assists", "Avg_Rebounds", "Avg_Steals", "Avg_Turnovers", "Avg_Blocks"]
-            selected_stat = st.selectbox("Select a Stat to Compare Across Teams", stat_options)
+        # ✅ Dropdown to choose a stat type
+        stat_options = ["Avg_Points", "Avg_Fouls", "Avg_Free_Throws", "Avg_Field_Goals", "Avg_Assists", "Avg_Rebounds", "Avg_Steals", "Avg_Turnovers", "Avg_Blocks"]
+        selected_stat = st.selectbox("Select a Stat to Compare Across Teams", stat_options)
 
-            # ✅ Create a bar chart
-            st.subheader(f"📊 {selected_stat} Comparison Across Teams")
-            fig = px.bar(
-                df, x="Team", y=selected_stat, color="Location", 
-                title=f"{selected_stat} Per Game by Team"
-            )
-            st.plotly_chart(fig)
+        # ✅ Create a bar chart
+        st.subheader(f"📊 {selected_stat} Comparison Across Teams")
+        fig = px.bar(
+            df, x="Team", y=selected_stat, color="Location", 
+            title=f"{selected_stat} Per Game by Team"
+        )
+        st.plotly_chart(fig)
+
+        # ✅ Add team shot chart below the stats graph
+        selected_team = st.selectbox("Select a Team", df["Team"].unique())
+        st.subheader(f"🎯 {selected_team} Shot Chart")
+        generate_team_shot_chart(selected_team)
 
     elif page == "Head-to-Head Comparison":
         df = fetch_team_data()  

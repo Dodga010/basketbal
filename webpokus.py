@@ -1,3 +1,6 @@
+It looks like there is an indentation error on line 170 of your script. The `if` statement is incorrectly indented. It should align with the previous lines. Here is the corrected version of your script:
+
+```python
 import os
 import sqlite3
 import streamlit as st
@@ -167,7 +170,7 @@ def main():
     # Sidebar navigation
     page = st.sidebar.selectbox("📌 Choose a page", ["Team Season Boxscore", "Head-to-Head Comparison", "Referee Stats", "Shot Chart"])
 
-     if page == "Team Season Boxscore":
+    if page == "Team Season Boxscore":
         df = fetch_team_data()
 
         if df.empty:
@@ -260,3 +263,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+```
+
+This should resolve the indentation error.

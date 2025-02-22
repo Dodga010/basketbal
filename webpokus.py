@@ -211,31 +211,31 @@ def main():
     page = st.sidebar.selectbox("📌 Choose a page", ["Team Season Boxscore", "Head-to-Head Comparison", "Referee Stats", "Shot Chart"])
 
     if page == "Team Season Boxscore":
-    df = fetch_team_data()
+        df = fetch_team_data()
 
-    if df.empty:
-        st.warning("No team data available.")
-    else:
-        st.subheader("📊 Season Team Statistics (Averages Per Game)")
-        numeric_cols = df.select_dtypes(include=['number']).columns
-        st.dataframe(df.style.format({col: "{:.1f}" for col in numeric_cols}))
+        if df.empty:
+            st.warning("No team data available.")
+        else:
+            st.subheader("📊 Season Team Statistics (Averages Per Game)")
+            numeric_cols = df.select_dtypes(include=['number']).columns
+            st.dataframe(df.style.format({col: "{:.1f}" for col in numeric_cols}))
 
-        # ✅ Dropdown to choose a stat type
-        stat_options = ["Avg_Points", "Avg_Fouls", "Avg_Free_Throws", "Avg_Field_Goals", "Avg_Assists", "Avg_Rebounds", "Avg_Steals", "Avg_Turnovers", "Avg_Blocks"]
-        selected_stat = st.selectbox("Select a Stat to Compare Across Teams", stat_options)
+            # ✅ Dropdown to choose a stat type
+            stat_options = ["Avg_Points", "Avg_Fouls", "Avg_Free_Throws", "Avg_Field_Goals", "Avg_Assists", "Avg_Rebounds", "Avg_Steals", "Avg_Turnovers", "Avg_Blocks"]
+            selected_stat = st.selectbox("Select a Stat to Compare Across Teams", stat_options)
 
-        # ✅ Create a bar chart
-        st.subheader(f"📊 {selected_stat} Comparison Across Teams")
-        fig = px.bar(
-            df, x="Team", y=selected_stat, color="Location", 
-            title=f"{selected_stat} Per Game by Team"
-        )
-        st.plotly_chart(fig)
+            # ✅ Create a bar chart
+            st.subheader(f"📊 {selected_stat} Comparison Across Teams")
+            fig = px.bar(
+                df, x="Team", y=selected_stat, color="Location", 
+                title=f"{selected_stat} Per Game by Team"
+            )
+            st.plotly_chart(fig)
 
-        # ✅ Add team shot chart below the stats graph
-        selected_team = st.selectbox("Select a Team", df["Team"].unique())
-        st.subheader(f"🎯 {selected_team} Shot Chart")
-        generate_team_shot_chart(selected_team)
+            # ✅ Add team shot chart below the stats graph
+            selected_team = st.selectbox("Select a Team", df["Team"].unique())
+            st.subheader(f"🎯 {selected_team} Shot Chart")
+            generate_team_shot_chart(selected_team)
 
     elif page == "Head-to-Head Comparison":
         df = fetch_team_data()  
@@ -302,7 +302,7 @@ def main():
             st.warning("No player data available.")
         else:
             player_name = st.selectbox("Select a Player", players)
-            generate_shot_chart(player_name)
+            generate_team_shot_chart(player_name)
 
 if __name__ == "__main__":
     main()

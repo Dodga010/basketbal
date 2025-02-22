@@ -167,7 +167,7 @@ def main():
     # Sidebar navigation
     page = st.sidebar.selectbox("📌 Choose a page", ["Team Season Boxscore", "Head-to-Head Comparison", "Referee Stats", "Shot Chart"])
 
-    if page == "Team Season Boxscore":
+     if page == "Team Season Boxscore":
         df = fetch_team_data()
 
         if df.empty:
@@ -176,6 +176,20 @@ def main():
             st.subheader("📊 Season Team Statistics (Averages Per Game)")
             numeric_cols = df.select_dtypes(include=['number']).columns
             st.dataframe(df.style.format({col: "{:.1f}" for col in numeric_cols}))
+
+            # ✅ Dropdown to choose a team
+            team_options = df["Team"].unique()
+            selected_team = st.selectbox("Select a Team to View Stats", team_options)
+            team_stats = df[df["Team"] == selected_team]
+
+            if not team_stats.empty:
+                # ✅ Create a bar chart
+                st.subheader(f"📉 {selected_team} Stats Per Game")
+                fig = px.bar(
+                    team_stats.melt(id_vars=["Team", "Location", "Games_Played"], var_name="Stat", value_name="Value"),
+                    x="Stat", y="Value", title=f"{selected_team} Stats Per Game", color="Stat"
+                )
+                st.plotly_chart(fig)
 
     elif page == "Head-to-Head Comparison":
         df = fetch_team_data()  

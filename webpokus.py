@@ -56,15 +56,15 @@ def fetch_team_shots(selected_team):
 
     conn = sqlite3.connect(db_path)
     query = """
-    SELECT s.x_coord, s.y_coord, s.shot_result
-    FROM Shots s
-    JOIN Teams t ON s.team_id = t.team_id
-    WHERE t.name = ?;
+    SELECT x_coord, y_coord, shot_result
+    FROM Shots
+    WHERE team_id = (SELECT team_id FROM Teams WHERE name = ? LIMIT 1);
     """
     df = pd.read_sql(query, conn, params=(selected_team,))
     conn.close()
     
     return df
+
 
 
 # ✅ Fetch Assists vs Turnovers
@@ -160,48 +160,6 @@ def generate_team_shot_chart(team_name):
     # ✅ Show chart in Streamlit
     st.pyplot(fig)
 
-    # ✅ Convert shot_result to match 'made' or 'missed' conditions
-    df_shots["shot_result"] = df_shots["shot_result"].astype(str)
-    df_shots["shot_result"] = df_shots["shot_result"].replace({"1": "made", "0": "missed"})
-
-    # ✅ Scale coordinates to match court image dimensions
-    df_shots["x_coord"] = df_shots["x_coord"] * 2.8  
-    df_shots["y_coord"] = 261 - (df_shots["y_coord"] * 2.61)
-
-    # ✅ Load court image
-    court_img = mpimg.imread("fiba_courtonly.jpg")
-
-    # ✅ Create figure
-    fig, ax = plt.subplots(figsize=(8, 6))
-    ax.imshow(court_img, extent=[0, 280, 0, 261], aspect="auto")
-
-    # ✅ Heatmap (restrict to court area)
-    sns.kdeplot(
-        data=df_shots, 
-        x="x_coord", y="y_coord", 
-        cmap="coolwarm", fill=True, alpha=0.5, ax=ax, 
-        bw_adjust=0.5, clip=[[0, 280], [0, 261]]  # 🔥 Restrict heatmap within the court
-    )
-
-    # ✅ Plot individual shots
-    made_shots = df_shots[df_shots["shot_result"] == "made"]
-    missed_shots = df_shots[df_shots["shot_result"] == "missed"]
-
-    ax.scatter(made_shots["x_coord"], made_shots["y_coord"], 
-               c="lime", edgecolors="black", s=35, alpha=1, zorder=3, label="Made Shots")
-
-    ax.scatter(missed_shots["x_coord"], missed_shots["y_coord"], 
-               c="red", edgecolors="black", s=35, alpha=1, zorder=3, label="Missed Shots")
-
-    # ✅ Remove all axis elements (clean chart)
-    ax.set_xticks([])
-    ax.set_yticks([])
-    ax.set_xticklabels([])
-    ax.set_yticklabels([])
-    ax.axis("off")  # Hide axis
-
-    # ✅ Display chart in Streamlit
-    st.pyplot(fig)
 
 # ✅ Main Function
 def main():
@@ -236,6 +194,7 @@ def main():
             selected_team = st.selectbox("Select a Team", df["Team"].unique())
             st.subheader(f"🎯 {selected_team} Shot Chart")
             generate_team_shot_chart(selected_team)
+
 
     elif page == "Head-to-Head Comparison":
         df = fetch_team_data()  

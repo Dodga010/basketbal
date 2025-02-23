@@ -47,25 +47,6 @@ def fetch_team_data():
     df = pd.read_sql(query, conn)
     conn.close()
     return df
-    
-def fetch_player_team_shots(player_name, team_name):
-    """Fetch all shots for the selected player and team."""
-    if not table_exists("Shots"):
-        st.error("⚠️ 'Shots' table not found!")
-        return pd.DataFrame()
-
-    conn = sqlite3.connect(db_path)
-    query = """
-    SELECT x_coord, y_coord, shot_result
-    FROM Shots
-    WHERE player_name = ? AND team_id = (SELECT team_id FROM Teams WHERE name = ? LIMIT 1);
-    """
-    df = pd.read_sql(query, conn, params=(player_name, team_name))
-    conn.close()
-    
-    return df
-
-
 
 # ✅ Fetch Assists vs Turnovers
 def fetch_assists_vs_turnovers():
@@ -116,85 +97,68 @@ def fetch_players():
     return players
 
 # ✅ Generate Shot Chart
-def generate_player_shot_chart(player_name):
-    """Generate a shot chart for an individual player."""
-    if not table_exists("Shots"):
-        st.error("⚠️ 'Shots' table not found!")
+def generate_shot_chart(player_name):
+    """Generate a shot chart with heatmap restricted within the court boundaries."""
+
+    if not os.path.exists("fiba_courtonly.jpg"):
+        st.error("⚠️ Court image file 'fiba_courtonly.jpg' is missing!")
         return
 
     conn = sqlite3.connect(db_path)
     query = """
     SELECT x_coord, y_coord, shot_result
-    FROM Shots
+    FROM Shots 
     WHERE player_name = ?;
     """
-    df_shots = pd.read_sql(query, conn, params=(player_name,))
+    df_shots = pd.read_sql_query(query, conn, params=(player_name,))
     conn.close()
 
     if df_shots.empty:
         st.warning(f"❌ No shot data found for {player_name}.")
         return
 
-    df_shots["x_coord"] *= 2.8  
+    # ✅ Convert shot_result to match 'made' or 'missed' conditions
+    df_shots["shot_result"] = df_shots["shot_result"].astype(str)
+    df_shots["shot_result"] = df_shots["shot_result"].replace({"1": "made", "0": "missed"})
+
+    # ✅ Scale coordinates to match court image dimensions
+    df_shots["x_coord"] = df_shots["x_coord"] * 2.8  
     df_shots["y_coord"] = 261 - (df_shots["y_coord"] * 2.61)
 
+    # ✅ Load court image
     court_img = mpimg.imread("fiba_courtonly.jpg")
+
+    # ✅ Create figure
     fig, ax = plt.subplots(figsize=(8, 6))
     ax.imshow(court_img, extent=[0, 280, 0, 261], aspect="auto")
 
-    sns.kdeplot(data=df_shots, x="x_coord", y="y_coord", cmap="coolwarm", fill=True, alpha=0.5, ax=ax, bw_adjust=0.5, clip=[[0, 280], [0, 261]])
+    # ✅ Heatmap (restrict to court area)
+    sns.kdeplot(
+        data=df_shots, 
+        x="x_coord", y="y_coord", 
+        cmap="coolwarm", fill=True, alpha=0.5, ax=ax, 
+        bw_adjust=0.5, clip=[[0, 280], [0, 261]]  # 🔥 Restrict heatmap within the court
+    )
 
-    made_shots = df_shots[df_shots["shot_result"] == 1]
-    missed_shots = df_shots[df_shots["shot_result"] == 0]
+    # ✅ Plot individual shots
+    made_shots = df_shots[df_shots["shot_result"] == "made"]
+    missed_shots = df_shots[df_shots["shot_result"] == "missed"]
 
-    ax.scatter(made_shots["x_coord"], made_shots["y_coord"], c="lime", edgecolors="black", s=35, alpha=1, zorder=3, label="Made Shots")
-    ax.scatter(missed_shots["x_coord"], missed_shots["y_coord"], c="red", edgecolors="black", s=35, alpha=1, zorder=3, label="Missed Shots")
+    ax.scatter(made_shots["x_coord"], made_shots["y_coord"], 
+               c="lime", edgecolors="black", s=35, alpha=1, zorder=3, label="Made Shots")
 
+    ax.scatter(missed_shots["x_coord"], missed_shots["y_coord"], 
+               c="red", edgecolors="black", s=35, alpha=1, zorder=3, label="Missed Shots")
+
+    # ✅ Remove all axis elements (clean chart)
     ax.set_xticks([])
     ax.set_yticks([])
-    ax.axis("off")
+    ax.set_xticklabels([])
+    ax.set_yticklabels([])
+    ax.axis("off")  # Hide axis
+
+    # ✅ Display chart in Streamlit
     st.pyplot(fig)
-
-def generate_team_shot_chart(team_name):
-    """Generate a shot chart for a selected team."""
-    if not table_exists("Shots"):
-        st.error("⚠️ 'Shots' table not found!")
-        return
-
-    conn = sqlite3.connect(db_path)
-    query = """
-    SELECT x_coord, y_coord, shot_result
-    FROM Shots
-    WHERE team_id = (SELECT team_id FROM Teams WHERE name = ? LIMIT 1);
-    """
-    df_shots = pd.read_sql(query, conn, params=(team_name,))
-    conn.close()
-
-    if df_shots.empty:
-        st.warning(f"❌ No shot data found for {team_name}.")
-        return
-
-    df_shots["x_coord"] *= 2.8  
-    df_shots["y_coord"] = 261 - (df_shots["y_coord"] * 2.61)
-
-    court_img = mpimg.imread("fiba_courtonly.jpg")
-    fig, ax = plt.subplots(figsize=(8, 6))
-    ax.imshow(court_img, extent=[0, 280, 0, 261], aspect="auto")
-
-    sns.kdeplot(data=df_shots, x="x_coord", y="y_coord", cmap="coolwarm", fill=True, alpha=0.5, ax=ax, bw_adjust=0.5, clip=[[0, 280], [0, 261]])
-
-    made_shots = df_shots[df_shots["shot_result"] == 1]
-    missed_shots = df_shots[df_shots["shot_result"] == 0]
-
-    ax.scatter(made_shots["x_coord"], made_shots["y_coord"], c="lime", edgecolors="black", s=35, alpha=1, zorder=3, label="Made Shots")
-    ax.scatter(missed_shots["x_coord"], missed_shots["y_coord"], c="red", edgecolors="black", s=35, alpha=1, zorder=3, label="Missed Shots")
-
-    ax.set_xticks([])
-    ax.set_yticks([])
-    ax.axis("off")
-    st.pyplot(fig)
-
-
 
 # ✅ Main Function
 def main():
@@ -205,26 +169,13 @@ def main():
 
     if page == "Team Season Boxscore":
         df = fetch_team_data()
+
         if df.empty:
             st.warning("No team data available.")
         else:
-            st.subheader("📊 Team Statistics (Averages Per Game)")
-
-            # ✅ Dropdown to select a team
-            selected_team = st.selectbox("Select a Team", df["Team"].unique())
-
-            # ✅ Dropdown to choose a stat type
-            stat_options = ["Avg_Points", "Avg_Fouls", "Avg_Free_Throws", "Avg_Field_Goals", "Avg_Assists", "Avg_Rebounds", "Avg_Steals", "Avg_Turnovers", "Avg_Blocks"]
-            selected_stat = st.selectbox("Select a Stat to Compare Across Teams", stat_options)
-
-            # ✅ Create a bar chart for the selected stat across all teams
-            st.subheader(f"📊 {selected_stat} Comparison Across Teams")
-            fig = px.bar(df, x="Team", y=selected_stat, color="Location", title=f"{selected_stat} Per Game by Team")
-            st.plotly_chart(fig)
-
-            # ✅ Add team shot chart below the stats graph
-            st.subheader(f"🎯 {selected_team} Shot Chart")
-            generate_team_shot_chart(selected_team)
+            st.subheader("📊 Season Team Statistics (Averages Per Game)")
+            numeric_cols = df.select_dtypes(include=['number']).columns
+            st.dataframe(df.style.format({col: "{:.1f}" for col in numeric_cols}))
 
     elif page == "Head-to-Head Comparison":
         df = fetch_team_data()  
@@ -291,6 +242,7 @@ def main():
             st.warning("No player data available.")
         else:
             player_name = st.selectbox("Select a Player", players)
-            generate_player_shot_chart(player_name)
+            generate_shot_chart(player_name)
+
 if __name__ == "__main__":
     main()

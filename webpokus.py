@@ -419,16 +419,16 @@ def main():
             st.plotly_chart(fig_referee)
 
     elif page == "Shot Chart":
-    	st.subheader("🎯 Player Shot Chart")
-    	players = fetch_players()
-        
-    	if not players:
-        	st.warning("No player data available.")
-    	else:
-        	player_name = st.selectbox("Select a Player", players)
-        	generate_shot_chart(player_name)
+    st.subheader("🎯 Player Shot Chart")
+    players = fetch_players()
+    
+    if not players:
+        st.warning("No player data available.")
+    else:
+        player_name = st.selectbox("Select a Player", players)
+        generate_shot_chart(player_name)
 
-        # Mean stats per game
+        # Mean stats per game (correctly indented inside 'else')
         player_stats = fetch_player_stats(player_name)
         if not player_stats.empty:
             st.subheader(f"📊 {player_name} - Average Stats per Game")
@@ -443,7 +443,7 @@ def main():
         else:
             st.warning(f"No statistics available for {player_name}.")
 
-        # Game-by-game stats
+        # Game-by-game stats (correctly indented)
         player_game_stats = fetch_player_game_stats(player_name)
         if not player_game_stats.empty:
             st.subheader(f"📋 {player_name} - Game by Game Statistics")
@@ -475,7 +475,7 @@ def main():
         else:
             st.warning(f"No game-by-game stats available for {player_name}.")
 
-        # 🚀 Add per-minute stats table clearly here
+        # Per-minute stats (correctly indented)
         player_per_minute_stats = fetch_player_stats_per_minute(player_name)
         if not player_per_minute_stats.empty:
             st.subheader(f"⏱️ {player_name} - Stats per Minute Played")
@@ -491,6 +491,9 @@ def main():
             }))
         else:
             st.warning(f"No per-minute stats available for {player_name}.")
+
+if __name__ == "__main__":
+    main()
             
 if __name__ == "__main__":
     main()

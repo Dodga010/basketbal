@@ -95,6 +95,37 @@ def fetch_players():
     players = pd.read_sql(query, conn)["player_name"].tolist()
     conn.close()
     return players
+    
+def fetch_player_stats(player_name):
+    """Fetch player statistics from Players table."""
+    conn = sqlite3.connect(db_path)
+    query = """
+    SELECT 
+        minutes_played AS "MIN",
+        points AS "PTS",
+        assists AS "AST",
+        rebounds_total AS "REB",
+        steals AS "STL",
+        blocks AS "BLK",
+        turnovers AS "TO",
+        field_goals_made AS "FGM",
+        field_goals_attempted AS "FGA",
+        field_goal_percentage AS "FG%",
+        three_pointers_made AS "3PM",
+        three_pointers_attempted AS "3PA",
+        three_point_percentage AS "3P%",
+        two_pointers_made AS "2PM",
+        two_pointers_attempted AS "2PA",
+        two_point_percentage AS "2P%",
+        free_throws_made AS "FTM",
+        free_throws_attempted AS "FTA",
+        free_throw_percentage AS "FT%"
+    FROM Players 
+    WHERE first_name || ' ' || last_name = ?
+    """
+    df = pd.read_sql(query, conn, params=(player_name,))
+    conn.close()
+    return df
 
 # ✅ Generate Shot Chart
 def generate_shot_chart(player_name):
@@ -236,13 +267,26 @@ def main():
             st.plotly_chart(fig_referee)
 
     elif page == "Shot Chart":
-        st.subheader("🎯 Player Shot Chart")
-        players = fetch_players()
-        if not players:
-            st.warning("No player data available.")
+    st.subheader("🎯 Player Shot Chart")
+    players = fetch_players()
+    if not players:
+        st.warning("No player data available.")
+    else:
+        player_name = st.selectbox("Select a Player", players)
+        generate_shot_chart(player_name)
+        
+        # ✅ Display player stats below shot chart
+        player_stats = fetch_player_stats(player_name)
+        if not player_stats.empty:
+            st.subheader(f"📊 {player_name} - Player Statistics")
+            st.dataframe(player_stats.style.format({
+                "FG%": "{:.1%}",
+                "3P%": "{:.1%}",
+                "2P%": "{:.1%}",
+                "FT%": "{:.1%}"
+            }))
         else:
-            player_name = st.selectbox("Select a Player", players)
-            generate_shot_chart(player_name)
+            st.warning(f"No statistics available for {player_name}.")
 
 if __name__ == "__main__":
     main()

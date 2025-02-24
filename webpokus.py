@@ -95,35 +95,144 @@ def fetch_players():
     players = pd.read_sql(query, conn)["player_name"].tolist()
     conn.close()
     return players
-    
-def fetch_player_stats(player_name):
-    """Fetch player statistics from Players table."""
+def fetch_player_game_stats(player_name):
     conn = sqlite3.connect(db_path)
+
+    if ". " in player_name:
+        first_initial, last_name = player_name.split(". ")
+    else:
+        parts = player_name.split(" ")
+        first_initial = parts[0][0]
+        last_name = " ".join(parts[1:])
+
+    first_initial = first_initial.strip().lower()
+    last_name = last_name.strip().lower()
+
     query = """
     SELECT 
-        minutes_played AS "MIN",
-        points AS "PTS",
-        assists AS "AST",
-        rebounds_total AS "REB",
-        steals AS "STL",
-        blocks AS "BLK",
-        turnovers AS "TO",
-        field_goals_made AS "FGM",
-        field_goals_attempted AS "FGA",
-        field_goal_percentage AS "FG%",
-        three_pointers_made AS "3PM",
-        three_pointers_attempted AS "3PA",
-        three_point_percentage AS "3P%",
-        two_pointers_made AS "2PM",
-        two_pointers_attempted AS "2PA",
-        two_point_percentage AS "2P%",
-        free_throws_made AS "FTM",
-        free_throws_attempted AS "FTA",
-        free_throw_percentage AS "FT%"
-    FROM Players 
-    WHERE first_name || ' ' || last_name = ?
+        G.game_id AS 'Game ID',
+        P.minutes_played AS 'MIN',
+        P.points AS 'PTS',
+        P.field_goals_made AS 'FGM',
+        P.field_goals_attempted AS 'FGA',
+        CASE WHEN P.field_goals_attempted > 0 THEN CAST(P.field_goals_made AS FLOAT) / P.field_goals_attempted ELSE 0 END AS 'FG%',
+
+        P.three_pointers_made AS '3PM',
+        P.three_pointers_attempted AS '3PA',
+        CASE WHEN P.three_pointers_attempted > 0 THEN CAST(P.three_pointers_made AS FLOAT) / P.three_pointers_attempted ELSE 0 END AS '3P%',
+
+        P.two_pointers_made AS '2PM',
+        P.two_pointers_attempted AS '2PA',
+        CASE WHEN P.two_pointers_attempted > 0 THEN CAST(P.two_pointers_made AS FLOAT) / P.two_pointers_attempted ELSE 0 END AS '2P%',
+
+        P.free_throws_made AS 'FTM',
+        P.free_throws_attempted AS 'FTA',
+        CASE WHEN P.free_throws_attempted > 0 THEN CAST(P.free_throws_made AS FLOAT) / P.free_throws_attempted ELSE 0 END AS 'FT%',
+
+        P.rebounds_total AS 'REB',
+        P.assists AS 'AST',
+        P.steals AS 'STL',
+        P.blocks AS 'BLK',
+        P.turnovers AS 'TO',
+
+        -- Corrected PPS calculation here
+        (CAST(P.points AS FLOAT) / NULLIF((P.field_goals_attempted + 0.44 * P.free_throws_attempted),0)) AS 'PPS'
+
+    FROM Players P
+    JOIN Games G ON P.game_id = G.game_id
+    WHERE LOWER(SUBSTR(P.first_name, 1, 1)) = ?
+      AND LOWER(P.last_name) = ?
+    ORDER BY G.game_id DESC;
     """
-    df = pd.read_sql(query, conn, params=(player_name,))
+
+    df = pd.read_sql(query, conn, params=(first_initial, last_name))
+    conn.close()
+    return df
+def fetch_league_average_stats():
+    conn = sqlite3.connect(db_path)
+
+    query = """
+    SELECT 
+        AVG(CAST(points AS REAL)) AS 'PTS',
+        AVG(CAST(field_goals_made AS REAL)) AS 'FGM',
+        AVG(CAST(field_goals_attempted AS REAL)) AS 'FGA',
+        SUM(CAST(field_goals_made AS REAL)) / NULLIF(SUM(field_goals_attempted),0) AS 'FG%',
+
+        AVG(CAST(three_pointers_made AS REAL)) AS '3PM',
+        AVG(CAST(three_pointers_attempted AS REAL)) AS '3PA',
+        SUM(CAST(three_pointers_made AS REAL)) / NULLIF(SUM(three_pointers_attempted),0) AS '3P%',
+
+        AVG(CAST(two_pointers_made AS REAL)) AS '2PM',
+        AVG(CAST(two_pointers_attempted AS REAL)) AS '2PA',
+        SUM(CAST(two_pointers_made AS REAL)) / NULLIF(SUM(two_pointers_attempted),0) AS '2P%',
+
+        AVG(CAST(free_throws_made AS REAL)) AS 'FTM',
+        AVG(CAST(free_throws_attempted AS REAL)) AS 'FTA',
+        SUM(CAST(free_throws_made AS REAL)) / NULLIF(SUM(free_throws_attempted),0) AS 'FT%',
+
+        AVG(CAST(rebounds_total AS REAL)) AS 'REB',
+        AVG(CAST(assists AS REAL)) AS 'AST',
+        AVG(CAST(steals AS REAL)) AS 'STL',
+        AVG(CAST(blocks AS REAL)) AS 'BLK',
+        AVG(CAST(turnovers AS REAL)) AS 'TO',
+
+        SUM(CAST(points AS REAL)) / NULLIF(SUM(CAST(field_goals_attempted AS REAL) + 0.44 * CAST(free_throws_attempted AS REAL)),0) AS 'PPS'
+
+    FROM Players;
+    """
+
+    df = pd.read_sql(query, conn)
+    conn.close()
+    return df
+    
+def fetch_player_stats(player_name):
+    conn = sqlite3.connect(db_path)
+
+    if ". " in player_name:
+        first_initial, last_name = player_name.split(". ")
+    else:
+        parts = player_name.split(" ")
+        first_initial = parts[0][0]
+        last_name = " ".join(parts[1:])
+
+    first_initial = first_initial.strip().lower()
+    last_name = last_name.strip().lower()
+
+    query = """
+    SELECT 
+        AVG(CAST(points AS REAL)) AS 'PTS',
+        AVG(CAST(field_goals_made AS REAL)) AS 'FGM',
+        AVG(CAST(field_goals_attempted AS REAL)) AS 'FGA',
+        SUM(CAST(field_goals_made AS REAL))*1.0 / NULLIF(SUM(CAST(field_goals_attempted AS REAL)),0) AS 'FG%',
+
+        AVG(CAST(three_pointers_made AS REAL)) AS '3PM',
+        AVG(CAST(three_pointers_attempted AS REAL)) AS '3PA',
+        SUM(CAST(three_pointers_made AS REAL))*1.0 / NULLIF(SUM(CAST(three_pointers_attempted AS REAL)),0) AS '3P%',
+
+        AVG(CAST(two_pointers_made AS REAL)) AS '2PM',
+        AVG(CAST(two_pointers_attempted AS REAL)) AS '2PA',
+        SUM(CAST(two_pointers_made AS REAL))*1.0 / NULLIF(SUM(CAST(two_pointers_attempted AS REAL)),0) AS '2P%',
+
+        AVG(CAST(free_throws_made AS REAL)) AS 'FTM',
+        AVG(CAST(free_throws_attempted AS REAL)) AS 'FTA',
+        SUM(CAST(free_throws_made AS REAL))*1.0 / NULLIF(SUM(CAST(free_throws_attempted AS REAL)),0) AS 'FT%',
+
+        AVG(CAST(rebounds_total AS REAL)) AS 'REB',
+        AVG(CAST(assists AS REAL)) AS 'AST',
+        AVG(CAST(steals AS REAL)) AS 'STL',
+        AVG(CAST(blocks AS REAL)) AS 'BLK',
+        AVG(CAST(turnovers AS REAL)) AS 'TO',
+
+        -- Corrected PPS calculation here
+        SUM(CAST(points AS REAL)) / NULLIF(SUM(CAST(field_goals_attempted AS REAL) + 0.44 * CAST(free_throws_attempted AS REAL)),0) AS 'PPS'
+
+    FROM Players
+    WHERE LOWER(SUBSTR(first_name, 1, 1)) = ?
+      AND LOWER(last_name) = ?
+    GROUP BY LOWER(first_name), LOWER(last_name);
+    """
+
+    df = pd.read_sql(query, conn, params=(first_initial, last_name))
     conn.close()
     return df
 
@@ -267,26 +376,75 @@ def main():
             st.plotly_chart(fig_referee)
 
     elif page == "Shot Chart":
-    st.subheader("🎯 Player Shot Chart")
+        st.subheader("🎯 Player Shot Chart")
     players = fetch_players()
     if not players:
         st.warning("No player data available.")
     else:
         player_name = st.selectbox("Select a Player", players)
         generate_shot_chart(player_name)
-        
-        # ✅ Display player stats below shot chart
+
+        # Display player's mean stats
         player_stats = fetch_player_stats(player_name)
         if not player_stats.empty:
-            st.subheader(f"📊 {player_name} - Player Statistics")
-            st.dataframe(player_stats.style.format({
+            st.subheader(f"📊 {player_name} - Average Stats per Game")
+
+            # Fetch league average stats
+            league_avg_stats = fetch_league_average_stats()
+            league_avg_stats.insert(0, "Comparison", "League Average")
+            player_stats.insert(0, "Comparison", player_name)
+
+            # Combine player stats and league stats into one dataframe
+            combined_stats = pd.concat([player_stats, league_avg_stats], ignore_index=True)
+
+            # Display combined stats clearly
+            st.dataframe(combined_stats.style.format({
+                    "PTS": "{:.1f}",
                 "FG%": "{:.1%}",
                 "3P%": "{:.1%}",
                 "2P%": "{:.1%}",
-                "FT%": "{:.1%}"
+                "FT%": "{:.1%}",
+                "PPS": "{:.2f}"
             }))
         else:
             st.warning(f"No statistics available for {player_name}.")
+
+        # Detailed game-by-game stats with player averages at the bottom
+        player_game_stats = fetch_player_game_stats(player_name)
+        if not player_game_stats.empty:
+            st.subheader(f"📋 {player_name} - Game by Game Statistics")
+
+            mean_values = player_game_stats.mean(numeric_only=True)
+            mean_values['Game ID'] = 'Player Average'
+            mean_values['MIN'] = '-'
+
+            # Append mean row clearly
+            player_game_stats_with_mean = pd.concat([player_game_stats, mean_values.to_frame().T], ignore_index=True)
+
+            # Display nicely formatted dataframe
+            st.dataframe(player_game_stats_with_mean.style.format({
+                "FG%": "{:.1%}",
+                "3P%": "{:.1%}",
+                "2P%": "{:.1%}",
+                "FT%": "{:.1%}",
+                "PPS": "{:.2f}",
+                "PTS": "{:.1f}",
+                "FGM": "{:.1f}",
+                "FGA": "{:.1f}",
+                "3PM": "{:.1f}",
+                "3PA": "{:.1f}",
+                "2PM": "{:.1f}",
+                "2PA": "{:.1f}",
+                "FTM": "{:.1f}",
+                "FTA": "{:.1f}",
+                "REB": "{:.1f}",
+                "AST": "{:.1f}",
+                "STL": "{:.1f}",
+                "BLK": "{:.1f}",
+                "TO": "{:.1f}"
+            }))
+        else:
+            st.warning(f"No game-by-game stats available for {player_name}.")
 
 if __name__ == "__main__":
     main()

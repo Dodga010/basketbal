@@ -377,10 +377,10 @@ def main():
 
     elif page == "Shot Chart":
         st.subheader("🎯 Player Shot Chart")
-    	players = fetch_players()
-    	if not players:
-        	st.warning("No player data available.")
-    	else:
+    players = fetch_players()
+    if not players:
+        st.warning("No player data available.")
+    else:
         player_name = st.selectbox("Select a Player", players)
         generate_shot_chart(player_name)
 
@@ -399,7 +399,7 @@ def main():
 
             # Display combined stats clearly
             st.dataframe(combined_stats.style.format({
-                    "PTS": "{:.1f}",
+                "PTS": "{:.1f}",
                 "FG%": "{:.1%}",
                 "3P%": "{:.1%}",
                 "2P%": "{:.1%}",

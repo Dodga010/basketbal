@@ -301,15 +301,13 @@ def generate_shot_chart(player_name):
     st.pyplot(fig)
 
 # ✅ Main Function
+# ✅ Main Function
 def main():
     st.title("🏀 Basketball Stats Viewer")
-
-    # Sidebar navigation
     page = st.sidebar.selectbox("📌 Choose a page", ["Team Season Boxscore", "Head-to-Head Comparison", "Referee Stats", "Shot Chart"])
 
     if page == "Team Season Boxscore":
         df = fetch_team_data()
-
         if df.empty:
             st.warning("No team data available.")
         else:
@@ -318,133 +316,77 @@ def main():
             st.dataframe(df.style.format({col: "{:.1f}" for col in numeric_cols}))
 
     elif page == "Head-to-Head Comparison":
-        df = fetch_team_data()  
+        df = fetch_team_data()
         if df.empty:
             st.warning("No team data available.")
             return
-
         team_options = df["Team"].unique()
-
-        # Select two teams to compare
         st.subheader("🔄 Compare Two Teams Head-to-Head")
         team1 = st.selectbox("Select Team 1", team_options)
         team2 = st.selectbox("Select Team 2", team_options)
-
         if team1 != team2:
             st.subheader(f"📊 Season Stats Comparison: {team1} vs {team2}")
-
-            numeric_cols = df.columns[3:]  # Exclude 'Team', 'Location', 'Games_Played'
+            numeric_cols = df.columns[3:]
             team1_stats = df[df["Team"] == team1][numeric_cols]
             team2_stats = df[df["Team"] == team2][numeric_cols]
-
             if team1_stats.empty or team2_stats.empty:
                 st.error("⚠️ Error: One or both teams have no recorded stats.")
             else:
-                # Transpose and keep correct stat names
                 team1_stats = team1_stats.T.rename(columns={team1_stats.index[0]: "Value"})
                 team2_stats = team2_stats.T.rename(columns={team2_stats.index[0]: "Value"})
-
-                # Ensure both teams have the same stats for comparison
                 team1_stats, team2_stats = team1_stats.align(team2_stats, join='outer', axis=0, fill_value=0)
                 team1_stats["Stat"] = team1_stats.index
                 team2_stats["Stat"] = team2_stats.index
-
-                # 📊 Separate bar charts for each team
                 st.subheader(f"📉 {team1} Stats Per Game")
                 fig1 = px.bar(team1_stats, x="Stat", y="Value", title=f"{team1} Stats Per Game", color="Stat")
                 st.plotly_chart(fig1)
-
                 st.subheader(f"📉 {team2} Stats Per Game")
                 fig2 = px.bar(team2_stats, x="Stat", y="Value", title=f"{team2} Stats Per Game", color="Stat")
                 st.plotly_chart(fig2)
 
     elif page == "Referee Stats":
         df_referee = fetch_referee_data()
-
         if df_referee.empty:
             st.warning("No referee data available.")
         else:
             st.subheader("🦺 Referee Statistics")
             st.dataframe(df_referee.style.format({"Avg_Fouls_per_Game": "{:.1f}"}))
-
-            # 📊 Interactive bar chart for referees
             st.subheader("📉 Referee Stats: Average Fouls Called Per Game")
-            fig_referee = px.bar(df_referee, x="Referee", y="Avg_Fouls_per_Game",
-                                 labels={'Avg_Fouls_per_Game': 'Avg Fouls per Game'},
-                                 title="Average Fouls Per Game by Referee",
-                                 color="Referee")
+            fig_referee = px.bar(df_referee, x="Referee", y="Avg_Fouls_per_Game", labels={'Avg_Fouls_per_Game': 'Avg Fouls per Game'}, title="Average Fouls Per Game by Referee", color="Referee")
             st.plotly_chart(fig_referee)
 
     elif page == "Shot Chart":
         st.subheader("🎯 Player Shot Chart")
-    players = fetch_players()
-    if not players:
-        st.warning("No player data available.")
-    else:
-        player_name = st.selectbox("Select a Player", players)
-        generate_shot_chart(player_name)
-
-        # Display player's mean stats
-        player_stats = fetch_player_stats(player_name)
-        if not player_stats.empty:
-            st.subheader(f"📊 {player_name} - Average Stats per Game")
-
-            # Fetch league average stats
-            league_avg_stats = fetch_league_average_stats()
-            league_avg_stats.insert(0, "Comparison", "League Average")
-            player_stats.insert(0, "Comparison", player_name)
-
-            # Combine player stats and league stats into one dataframe
-            combined_stats = pd.concat([player_stats, league_avg_stats], ignore_index=True)
-
-            # Display combined stats clearly
-            st.dataframe(combined_stats.style.format({
-                "PTS": "{:.1f}",
-                "FG%": "{:.1%}",
-                "3P%": "{:.1%}",
-                "2P%": "{:.1%}",
-                "FT%": "{:.1%}",
-                "PPS": "{:.2f}"
-            }))
+        players = fetch_players()
+        if not players:
+            st.warning("No player data available.")
         else:
-            st.warning(f"No statistics available for {player_name}.")
-
-        # Detailed game-by-game stats with player averages at the bottom
-        player_game_stats = fetch_player_game_stats(player_name)
-        if not player_game_stats.empty:
-            st.subheader(f"📋 {player_name} - Game by Game Statistics")
-
-            mean_values = player_game_stats.mean(numeric_only=True)
-            mean_values['Game ID'] = 'Player Average'
-            mean_values['MIN'] = '-'
-
-            # Append mean row clearly
-            player_game_stats_with_mean = pd.concat([player_game_stats, mean_values.to_frame().T], ignore_index=True)
-
-            # Display nicely formatted dataframe
-            st.dataframe(player_game_stats_with_mean.style.format({
-                "FG%": "{:.1%}",
-                "3P%": "{:.1%}",
-                "2P%": "{:.1%}",
-                "FT%": "{:.1%}",
-                "PPS": "{:.2f}",
-                "PTS": "{:.1f}",
-                "FGM": "{:.1f}",
-                "FGA": "{:.1f}",
-                "3PM": "{:.1f}",
-                "3PA": "{:.1f}",
-                "2PM": "{:.1f}",
-                "2PA": "{:.1f}",
-                "FTM": "{:.1f}",
-                "FTA": "{:.1f}",
-                "REB": "{:.1f}",
-                "AST": "{:.1f}",
-                "STL": "{:.1f}",
-                "BLK": "{:.1f}",
-                "TO": "{:.1f}"
-            }))
-        else:
-            st.warning(f"No game-by-game stats available for {player_name}.")
+            player_name = st.selectbox("Select a Player", players)
+            generate_shot_chart(player_name)
+            player_stats = fetch_player_stats(player_name)
+            if not player_stats.empty:
+                st.subheader(f"📊 {player_name} - Average Stats per Game")
+                league_avg_stats = fetch_league_average_stats()
+                league_avg_stats.insert(0, "Comparison", "League Average")
+                player_stats.insert(0, "Comparison", player_name)
+                combined_stats = pd.concat([player_stats, league_avg_stats], ignore_index=True)
+                st.dataframe(combined_stats.style.format({
+                    "PTS": "{:.1f}", "FG%": "{:.1%}", "3P%": "{:.1%}", "2P%": "{:.1%}", "FT%": "{:.1%}", "PPS": "{:.2f}"
+                }))
+            else:
+                st.warning(f"No statistics available for {player_name}.")
+            player_game_stats = fetch_player_game_stats(player_name)
+            if not player_game_stats.empty:
+                st.subheader(f"📋 {player_name} - Game by Game Statistics")
+                mean_values = player_game_stats.mean(numeric_only=True)
+                mean_values['Game ID'] = 'Player Average'
+                mean_values['MIN'] = '-'
+                player_game_stats_with_mean = pd.concat([player_game_stats, mean_values.to_frame().T], ignore_index=True)
+                st.dataframe(player_game_stats_with_mean.style.format({
+                    "FG%": "{:.1%}", "3P%": "{:.1%}", "2P%": "{:.1%}", "FT%": "{:.1%}", "PPS": "{:.2f}", "PTS": "{:.1f}", "FGM": "{:.1f}", "FGA": "{:.1f}", "3PM": "{:.1f}", "3PA": "{:.1f}", "2PM": "{:.1f}", "2PA": "{:.1f}", "FTM": "{:.1f}", "FTA": "{:.1f}", "REB": "{:.1f}", "AST": "{:.1f}", "STL": "{:.1f}", "BLK": "{:.1f}", "TO": "{:.1f}"
+                }))
+            else:
+                st.warning(f"No game-by-game stats available for {player_name}.")
 
 if __name__ == "__main__":
     main()

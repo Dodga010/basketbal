@@ -84,6 +84,49 @@ def fetch_referee_data():
     df = pd.read_sql(query, conn)
     conn.close()
     return df
+    
+def fetch_player_stats_per_minute(player_name):
+    conn = sqlite3.connect(db_path)
+
+    if ". " in player_name:
+        first_initial, last_name = player_name.split(". ")
+    else:
+        parts = player_name.split(" ")
+        first_initial = parts[0][0]
+        last_name = " ".join(parts[1:])
+
+    first_initial = first_initial.strip().lower()
+    last_name = last_name.strip().lower()
+
+    query = """
+    SELECT 
+        SUM(CAST(points AS REAL)) / NULLIF(SUM((CAST(substr(minutes_played, 1, instr(minutes_played, ':') - 1) AS REAL) * 60) + CAST(substr(minutes_played, instr(minutes_played, ':') + 1) AS REAL)),0) AS 'PTS/min',
+        
+        SUM(CAST(rebounds_total AS REAL)) / NULLIF(SUM((CAST(substr(minutes_played, 1, instr(minutes_played, ':') - 1) AS REAL) * 60) + CAST(substr(minutes_played, instr(minutes_played, ':') + 1) AS REAL)),0) AS 'REB/min',
+        
+        SUM(CAST(assists AS REAL)) / NULLIF(SUM((CAST(substr(minutes_played, 1, instr(minutes_played, ':') - 1) AS REAL) * 60) + CAST(substr(minutes_played, instr(minutes_played, ':') + 1) AS REAL)),0) AS 'AST/min',
+
+        SUM(CAST(steals AS REAL)) / NULLIF(SUM((CAST(substr(minutes_played, 1, instr(minutes_played, ':') - 1) AS REAL) * 60) + CAST(substr(minutes_played, instr(minutes_played, ':') + 1) AS REAL)),0) AS 'STL/min',
+
+        SUM(CAST(blocks AS REAL)) / NULLIF(SUM((CAST(substr(minutes_played, 1, instr(minutes_played, ':') - 1) AS REAL) * 60) + CAST(substr(minutes_played, instr(minutes_played, ':') + 1) AS REAL)),0) AS 'BLK/min',
+
+        SUM(CAST(turnovers AS REAL)) / NULLIF(SUM((CAST(substr(minutes_played, 1, instr(minutes_played, ':') - 1) AS REAL) * 60) + CAST(substr(minutes_played, instr(minutes_played, ':') + 1) AS REAL)),0) AS 'TO/min',
+
+        SUM(CAST(field_goals_attempted AS REAL)) / NULLIF(SUM((CAST(substr(minutes_played, 1, instr(minutes_played, ':') - 1) AS REAL) * 60) + CAST(substr(minutes_played, instr(minutes_played, ':') + 1) AS REAL)),0) AS 'FGA/min',
+
+        SUM(CAST(points AS REAL)) / NULLIF(SUM(CAST(field_goals_attempted AS REAL) + 0.44 * CAST(free_throws_attempted AS REAL)),0) AS 'PPS'
+
+    FROM Players
+    WHERE LOWER(SUBSTR(first_name, 1, 1)) = ?
+      AND LOWER(last_name) = ?
+    """
+    df = pd.read_sql(query, conn, params=(first_initial, last_name))
+    conn.close()
+
+    # Convert from per second to per minute clearly
+    df = df.apply(lambda x: x * 60 if x.name not in ['PPS'] else x)
+    return df
+
 
 # ✅ Fetch Player Names for Dropdown
 def fetch_players():
@@ -376,7 +419,7 @@ def main():
             st.plotly_chart(fig_referee)
 
     elif page == "Shot Chart":
-        st.subheader("🎯 Player Shot Chart")
+    st.subheader("🎯 Player Shot Chart")
     players = fetch_players()
     if not players:
         st.warning("No player data available.")
@@ -384,21 +427,11 @@ def main():
         player_name = st.selectbox("Select a Player", players)
         generate_shot_chart(player_name)
 
-        # Display player's mean stats
+        # Mean stats per game
         player_stats = fetch_player_stats(player_name)
         if not player_stats.empty:
             st.subheader(f"📊 {player_name} - Average Stats per Game")
-
-            # Fetch league average stats
-            league_avg_stats = fetch_league_average_stats()
-            league_avg_stats.insert(0, "Comparison", "League Average")
-            player_stats.insert(0, "Comparison", player_name)
-
-            # Combine player stats and league stats into one dataframe
-            combined_stats = pd.concat([player_stats, league_avg_stats], ignore_index=True)
-
-            # Display combined stats clearly
-            st.dataframe(combined_stats.style.format({
+            st.dataframe(player_stats.style.format({
                 "PTS": "{:.1f}",
                 "FG%": "{:.1%}",
                 "3P%": "{:.1%}",
@@ -409,19 +442,14 @@ def main():
         else:
             st.warning(f"No statistics available for {player_name}.")
 
-        # Detailed game-by-game stats with player averages at the bottom
+        # Game-by-game stats
         player_game_stats = fetch_player_game_stats(player_name)
         if not player_game_stats.empty:
             st.subheader(f"📋 {player_name} - Game by Game Statistics")
-
             mean_values = player_game_stats.mean(numeric_only=True)
-            mean_values['Game ID'] = 'Player Average'
+            mean_values['Game ID'] = 'Average'
             mean_values['MIN'] = '-'
-
-            # Append mean row clearly
             player_game_stats_with_mean = pd.concat([player_game_stats, mean_values.to_frame().T], ignore_index=True)
-
-            # Display nicely formatted dataframe
             st.dataframe(player_game_stats_with_mean.style.format({
                 "FG%": "{:.1%}",
                 "3P%": "{:.1%}",
@@ -446,5 +474,22 @@ def main():
         else:
             st.warning(f"No game-by-game stats available for {player_name}.")
 
+        # 🚀 Add per-minute stats table clearly here
+        player_per_minute_stats = fetch_player_stats_per_minute(player_name)
+        if not player_per_minute_stats.empty:
+            st.subheader(f"⏱️ {player_name} - Stats per Minute Played")
+            st.dataframe(player_per_minute_stats.style.format({
+                "PTS/min": "{:.2f}",
+                "REB/min": "{:.2f}",
+                "AST/min": "{:.2f}",
+                "STL/min": "{:.2f}",
+                "BLK/min": "{:.2f}",
+                "TO/min": "{:.2f}",
+                "FGA/min": "{:.2f}",
+                "PPS": "{:.2f}"
+            }))
+        else:
+            st.warning(f"No per-minute stats available for {player_name}.")
+            
 if __name__ == "__main__":
     main()

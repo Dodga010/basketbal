@@ -420,77 +420,77 @@ def main():
 
     elif page == "Shot Chart":
     	st.subheader("🎯 Player Shot Chart")
-    players = fetch_players()
+    	players = fetch_players()
     
-    if not players:
-        st.warning("No player data available.")
-    else:
-        player_name = st.selectbox("Select a Player", players)
-        generate_shot_chart(player_name)
+    	if not players:
+        	st.warning("No player data available.")
+    	else:
+        	player_name = st.selectbox("Select a Player", players)
+        	generate_shot_chart(player_name)
 
-        # Mean stats per game (correctly indented inside 'else')
-        player_stats = fetch_player_stats(player_name)
-        if not player_stats.empty:
-            st.subheader(f"📊 {player_name} - Average Stats per Game")
-            st.dataframe(player_stats.style.format({
-                "PTS": "{:.1f}",
-                "FG%": "{:.1%}",
-                "3P%": "{:.1%}",
-                "2P%": "{:.1%}",
-                "FT%": "{:.1%}",
-                "PPS": "{:.2f}"
-            }))
-        else:
-            st.warning(f"No statistics available for {player_name}.")
+        	#Mean stats per game (correctly indented inside 'else')
+        	player_stats = fetch_player_stats(player_name)
+        	if not player_stats.empty:
+            	st.subheader(f"📊 {player_name} - Average Stats per Game")
+            	st.dataframe(player_stats.style.format({
+                	"PTS": "{:.1f}",
+                	"FG%": "{:.1%}",
+                	"3P%": "{:.1%}",
+                	"2P%": "{:.1%}",
+                	"FT%": "{:.1%}",
+                	"PPS": "{:.2f}"
+            	}))
+        	else:
+            	st.warning(f"No statistics available for {player_name}.")
 
-        # Game-by-game stats (correctly indented)
-        player_game_stats = fetch_player_game_stats(player_name)
-        if not player_game_stats.empty:
-            st.subheader(f"📋 {player_name} - Game by Game Statistics")
-            mean_values = player_game_stats.mean(numeric_only=True)
-            mean_values['Game ID'] = 'Average'
-            mean_values['MIN'] = '-'
-            player_game_stats_with_mean = pd.concat([player_game_stats, mean_values.to_frame().T], ignore_index=True)
-            st.dataframe(player_game_stats_with_mean.style.format({
-                "FG%": "{:.1%}",
-                "3P%": "{:.1%}",
-                "2P%": "{:.1%}",
-                "FT%": "{:.1%}",
-                "PPS": "{:.2f}",
-                "PTS": "{:.1f}",
-                "FGM": "{:.1f}",
-                "FGA": "{:.1f}",
-                "3PM": "{:.1f}",
-                "3PA": "{:.1f}",
-                "2PM": "{:.1f}",
-                "2PA": "{:.1f}",
-                "FTM": "{:.1f}",
-                "FTA": "{:.1f}",
-                "REB": "{:.1f}",
-                "AST": "{:.1f}",
-                "STL": "{:.1f}",
-                "BLK": "{:.1f}",
-                "TO": "{:.1f}"
-            }))
-        else:
-            st.warning(f"No game-by-game stats available for {player_name}.")
+        	# Game-by-game stats (correctly indented)
+       		player_game_stats = fetch_player_game_stats(player_name)
+       		if not player_game_stats.empty:
+            	st.subheader(f"📋 {player_name} - Game by Game Statistics")
+            	mean_values = player_game_stats.mean(numeric_only=True)
+            	mean_values['Game ID'] = 'Average'
+            	mean_values['MIN'] = '-'
+            	player_game_stats_with_mean = pd.concat([player_game_stats, mean_values.to_frame().T], ignore_index=True)
+            	st.dataframe(player_game_stats_with_mean.style.format({
+                	"FG%": "{:.1%}",
+                	"3P%": "{:.1%}",
+                	"2P%": "{:.1%}",
+                	"FT%": "{:.1%}",
+                	"PPS": "{:.2f}",
+                	"PTS": "{:.1f}",
+                	"FGM": "{:.1f}",
+                	"FGA": "{:.1f}",
+                	"3PM": "{:.1f}",
+                	"3PA": "{:.1f}",
+                	"2PM": "{:.1f}",
+                	"2PA": "{:.1f}",
+                	"FTM": "{:.1f}",
+                	"FTA": "{:.1f}",
+                	"REB": "{:.1f}",
+                	"AST": "{:.1f}",
+                	"STL": "{:.1f}",
+                	"BLK": "{:.1f}",
+                	"TO": "{:.1f}"
+            	}))
+        	else:
+            	st.warning(f"No game-by-game stats available for {player_name}.")
 
-        # Per-minute stats (correctly indented)
-        player_per_minute_stats = fetch_player_stats_per_minute(player_name)
-        if not player_per_minute_stats.empty:
-            st.subheader(f"⏱️ {player_name} - Stats per Minute Played")
-            st.dataframe(player_per_minute_stats.style.format({
-                "PTS/min": "{:.2f}",
-                "REB/min": "{:.2f}",
-                "AST/min": "{:.2f}",
-                "STL/min": "{:.2f}",
-                "BLK/min": "{:.2f}",
-                "TO/min": "{:.2f}",
-                "FGA/min": "{:.2f}",
-                "PPS": "{:.2f}"
-            }))
-        else:
-            st.warning(f"No per-minute stats available for {player_name}.")
+        	# Per-minute stats (correctly indented)
+        	player_per_minute_stats = fetch_player_stats_per_minute(player_name)
+        	if not player_per_minute_stats.empty:
+            	st.subheader(f"⏱️ {player_name} - Stats per Minute Played")
+            	st.dataframe(player_per_minute_stats.style.format({
+                	"PTS/min": "{:.2f}",
+                	"REB/min": "{:.2f}",
+                	"AST/min": "{:.2f}",
+                	"STL/min": "{:.2f}",
+                	"BLK/min": "{:.2f}",
+                	"TO/min": "{:.2f}",
+                	"FGA/min": "{:.2f}",
+                	"PPS": "{:.2f}"
+            	}))
+        	else:
+        		st.warning(f"No per-minute stats available for {player_name}.")
 
 if __name__ == "__main__":
     main()

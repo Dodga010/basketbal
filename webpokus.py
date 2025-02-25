@@ -136,7 +136,7 @@ def fetch_player_game_stats(player_name):
         P.turnovers AS 'TO',
 
         -- Corrected PPS calculation here
-        (CAST(P.points AS FLOAT) / NULLIF((P.field_goals_attempted + 0.44 * P.free_throws_attempted),0)) AS 'PPS'
+        (CAST(P.points AS FLOAT) / NULLIF((P.two_pointers_attempted + P.three_pointers_attempted + 0.44 * P.free_throws_attempted),0)) AS 'PPS'
 
     FROM Players P
     JOIN Games G ON P.game_id = G.game_id

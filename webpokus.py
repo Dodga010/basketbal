@@ -331,35 +331,33 @@ def fetch_player_stats(player_name):
 
     query = """
     SELECT 
-        AVG(CAST(points AS REAL)) AS 'PTS',
-        AVG(CAST(field_goals_made AS REAL)) AS 'FGM',
-        AVG(CAST(field_goals_attempted AS REAL)) AS 'FGA',
-        SUM(CAST(field_goals_made AS REAL))*1.0 / NULLIF(SUM(CAST(field_goals_attempted AS REAL)),0) AS 'FG%',
+    COUNT(CASE WHEN minutes_played <> '0:00' THEN 1 END) AS games_played,
 
-        AVG(CAST(three_pointers_made AS REAL)) AS '3PM',
-        AVG(CAST(three_pointers_attempted AS REAL)) AS '3PA',
-        SUM(CAST(three_pointers_made AS REAL))*1.0 / NULLIF(SUM(CAST(three_pointers_attempted AS REAL)),0) AS '3P%',
+    ROUND(SUM(CAST(points AS REAL)) * 1.0 / NULLIF(COUNT(CASE WHEN minutes_played <> '0:00' THEN 1 END),0), 1) AS 'PTS',
 
-        AVG(CAST(two_pointers_made AS REAL)) AS '2PM',
-        AVG(CAST(two_pointers_attempted AS REAL)) AS '2PA',
-        SUM(CAST(two_pointers_made AS REAL))*1.0 / NULLIF(SUM(CAST(two_pointers_attempted AS REAL)),0) AS '2P%',
+    ROUND(SUM(CAST(field_goals_made AS REAL)) * 100.0 / NULLIF(SUM(CAST(field_goals_attempted AS REAL)),0), 1) AS 'FG%',
+    
+    ROUND(SUM(CAST(three_pointers_made AS REAL)) * 100.0 / NULLIF(SUM(CAST(three_pointers_attempted AS REAL)),0), 1) AS '3P%',
+    
+    ROUND(SUM(CAST(two_pointers_made AS REAL)) * 100.0 / NULLIF(SUM(CAST(two_pointers_attempted AS REAL)),0), 1) AS '2P%',
+    
+    ROUND(SUM(CAST(free_throws_made AS REAL)) * 100.0 / NULLIF(SUM(CAST(free_throws_attempted AS REAL)),0), 1) AS 'FT%',
+    
+    ROUND(SUM(CAST(rebounds_total AS REAL)) * 1.0 / NULLIF(COUNT(CASE WHEN minutes_played <> '0:00' THEN 1 END),0), 1) AS 'REB',
+    
+    ROUND(SUM(CAST(assists AS REAL)) * 1.0 / NULLIF(COUNT(CASE WHEN minutes_played <> '0:00' THEN 1 END),0), 1) AS 'AST',
+    
+    ROUND(SUM(CAST(steals AS REAL)) * 1.0 / NULLIF(COUNT(CASE WHEN minutes_played <> '0:00' THEN 1 END),0), 1) AS 'STL',
+    
+    ROUND(SUM(CAST(blocks AS REAL)) * 1.0 / NULLIF(COUNT(CASE WHEN minutes_played <> '0:00' THEN 1 END),0), 1) AS 'BLK',
+    
+    ROUND(SUM(CAST(turnovers AS REAL)) * 1.0 / NULLIF(COUNT(CASE WHEN minutes_played <> '0:00' THEN 1 END),0), 1) AS 'TO',
+    
+    ROUND(SUM(CAST(points AS REAL)) / NULLIF(SUM(CAST(field_goals_attempted AS REAL) + 0.44 * CAST(free_throws_attempted AS REAL)),0), 2) AS 'PPS'
 
-        AVG(CAST(free_throws_made AS REAL)) AS 'FTM',
-        AVG(CAST(free_throws_attempted AS REAL)) AS 'FTA',
-        SUM(CAST(free_throws_made AS REAL))*1.0 / NULLIF(SUM(CAST(free_throws_attempted AS REAL)),0) AS 'FT%',
-
-        AVG(CAST(rebounds_total AS REAL)) AS 'REB',
-        AVG(CAST(assists AS REAL)) AS 'AST',
-        AVG(CAST(steals AS REAL)) AS 'STL',
-        AVG(CAST(blocks AS REAL)) AS 'BLK',
-        AVG(CAST(turnovers AS REAL)) AS 'TO',
-
-        -- Corrected PPS calculation here
-        SUM(CAST(points AS REAL)) / NULLIF(SUM(CAST(field_goals_attempted AS REAL) + 0.44 * CAST(free_throws_attempted AS REAL)),0) AS 'PPS'
-
-    FROM Players
-    WHERE LOWER(SUBSTR(first_name, 1, 1)) = ?
-      AND LOWER(last_name) = ?
+	FROM Players
+	WHERE LOWER(SUBSTR(first_name, 1, 1)) = ?
+  AND LOWER(last_name) = ?
     GROUP BY LOWER(first_name), LOWER(last_name);
     """
 
@@ -498,14 +496,14 @@ def main():
             player_stats = fetch_player_stats(player_name)
             if not player_stats.empty:
                 st.subheader(f"📊 {player_name} - Average Stats per Game")
-                st.dataframe(player_stats.round(3).style.format({
-                    "PTS": "{:.3f}",
-                    "FG%": "{:.3f}%",
-                    "3P%": "{:.3f}%",
-                    "2P%": "{:.3f}%",
-                    "FT%": "{:.3f}%",
-                    "PPS": "{:.3f}"
-                }))
+                st.dataframe(player_stats.style.format({
+    				"PTS": "{:.1f}",
+    				"FG%": "{:.1%}",
+    				"3P%": "{:.1%}",
+    				"2P%": "{:.1%}",
+    				"FT%": "{:.1%}",
+    				"PPS": "{:.2f}"
+				}))
             else:
                 st.warning(f"No statistics available for {player_name}.")
 

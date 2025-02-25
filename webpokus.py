@@ -464,7 +464,7 @@ def main():
             st.plotly_chart(fig_referee)
 
     elif page == "Shot Chart":
-    st.subheader("🎯 Player Shot Chart")
+    	st.subheader("🎯 Player Shot Chart")
     players = fetch_players()
     
     if not players:

@@ -431,7 +431,6 @@ def generate_shot_chart(player_name):
     # ✅ Display chart in Streamlit
     st.pyplot(fig)
 
-# ✅ Main Function
 def main():
     st.title("🏀 Basketball Stats Viewer")
     page = st.sidebar.selectbox("📌 Choose a page", ["Team Season Boxscore", "Head-to-Head Comparison", "Referee Stats", "Shot Chart"])
@@ -443,7 +442,7 @@ def main():
         else:
             st.subheader("📊 Season Team Statistics (Averages Per Game)")
             numeric_cols = df.select_dtypes(include=['number']).columns
-            st.dataframe(df.style.format({col: "{:.1f}" for col in numeric_cols}))
+            st.dataframe(df.style.format({col: "{:.3f}" for col in numeric_cols}))
 
     elif page == "Head-to-Head Comparison":
         df = fetch_team_data()
@@ -480,7 +479,7 @@ def main():
             st.warning("No referee data available.")
         else:
             st.subheader("🦺 Referee Statistics")
-            st.dataframe(df_referee.style.format({"Avg_Fouls_per_Game": "{:.1f}"}))
+            st.dataframe(df_referee.style.format({"Avg_Fouls_per_Game": "{:.3f}"}))
             st.subheader("📉 Referee Stats: Average Fouls Called Per Game")
             fig_referee = px.bar(df_referee, x="Referee", y="Avg_Fouls_per_Game", labels={'Avg_Fouls_per_Game': 'Avg Fouls per Game'}, title="Average Fouls Per Game by Referee", color="Referee")
             st.plotly_chart(fig_referee)
@@ -499,13 +498,13 @@ def main():
             player_stats = fetch_player_stats(player_name)
             if not player_stats.empty:
                 st.subheader(f"📊 {player_name} - Average Stats per Game")
-                st.dataframe(player_stats.round(1).style.format({
-                    "PTS": "{:.1f}",
-                    "FG%": "{:.1f}%",
-                    "3P%": "{:.1f}%",
-                    "2P%": "{:.1f}%",
-                    "FT%": "{:.1f}%",
-                    "PPS": "{:.2f}"
+                st.dataframe(player_stats.round(3).style.format({
+                    "PTS": "{:.3f}",
+                    "FG%": "{:.3f}%",
+                    "3P%": "{:.3f}%",
+                    "2P%": "{:.3f}%",
+                    "FT%": "{:.3f}%",
+                    "PPS": "{:.3f}"
                 }))
             else:
                 st.warning(f"No statistics available for {player_name}.")
@@ -519,17 +518,17 @@ def main():
                 mean_values['MIN'] = '-'
                 player_game_stats_with_mean = pd.concat([player_game_stats, mean_values.to_frame().T], ignore_index=True)
                 st.dataframe(player_game_stats_with_mean.style.format({
-                    "FG%": "{:.1%}",
-                    "3P%": "{:.1%}",
-                    "2P%": "{:.1%}",
-                    "FT%": "{:.1%}",
-                    "PPS": "{:.2f}",
-                    "PTS": "{:.1f}",
-                    "REB": "{:.1f}",
-                    "AST": "{:.1f}",
-                    "STL": "{:.1f}",
-                    "BLK": "{:.1f}",
-                    "TO": "{:.1f}"
+                    "FG%": "{:.3f}%",
+                    "3P%": "{:.3f}%",
+                    "2P%": "{:.3f}%",
+                    "FT%": "{:.3f}%",
+                    "PPS": "{:.3f}",
+                    "PTS": "{:.3f}",
+                    "REB": "{:.3f}",
+                    "AST": "{:.3f}",
+                    "STL": "{:.3f}",
+                    "BLK": "{:.3f}",
+                    "TO": "{:.3f}"
                 }))
             else:
                 st.warning(f"No game-by-game stats available for {player_name}.")
@@ -538,16 +537,17 @@ def main():
             if not player_vs_league_40.empty:
                 st.subheader(f"📊 {player_name} vs. League - Stats per 40 Minutes")
                 st.dataframe(player_vs_league_40.style.format({
-                    "PTS": "{:.1f}",
-                    "REB": "{:.1f}",
-                    "AST": "{:.1f}",
-                    "STL": "{:.1f}",
-                    "BLK": "{:.1f}",
-                    "TO": "{:.1f}",
-                    "FGA": "{:.1f}",
-                    "PPS": "{:.2f}"
+                    "PTS": "{:.3f}",
+                    "REB": "{:.3f}",
+                    "AST": "{:.3f}",
+                    "STL": "{:.3f}",
+                    "BLK": "{:.3f}",
+                    "TO": "{:.3f}",
+                    "FGA": "{:.3f}",
+                    "PPS": "{:.3f}"
                 }))
             else:
+                st.warning(f"No per-40 stats available for {player_name}.")
                 st.warning(f"No per-40 stats available for {player_name}.")
 
 if __name__ == "__main__":

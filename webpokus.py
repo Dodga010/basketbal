@@ -149,8 +149,8 @@ def fetch_player_game_stats(player_name):
     conn.close()
     return df
     
-def fetch_player_stats_per_40(player_name):
-    """Calculate player's stats per 40 minutes by correctly summing all contributions and adjusting to 40 minutes."""
+def fetch_player_and_league_stats_per_40(player_name):
+    """Calculate player's stats per 40 minutes and compare against league averages per 40 minutes."""
     conn = sqlite3.connect(db_path)
 
     # ✅ Extract first initial and last name properly
@@ -164,61 +164,95 @@ def fetch_player_stats_per_40(player_name):
     first_initial = first_initial.strip().lower()
     last_name = last_name.strip().lower()
 
-    query = """
+    # ✅ Query for Player Stats
+    player_query = """
     SELECT 
-        minutes_played,
-        points, rebounds_total, assists, steals, blocks, turnovers, field_goals_attempted
+        minutes_played, points, rebounds_total, assists, steals, blocks, turnovers, field_goals_attempted
     FROM Players
     WHERE LOWER(SUBSTR(first_name, 1, 1)) = ?
       AND LOWER(last_name) = ?
     """
 
-    df = pd.read_sql(query, conn, params=(first_initial, last_name))
+    df_player = pd.read_sql(player_query, conn, params=(first_initial, last_name))
+
+    # ✅ Query for League Stats
+    league_query = """
+    SELECT 
+        minutes_played, points, rebounds_total, assists, steals, blocks, turnovers, field_goals_attempted
+    FROM Players
+    """
+
+    df_league = pd.read_sql(league_query, conn)
     conn.close()
 
-    if df.empty:
-        return pd.DataFrame()  # No data, return empty
-
-    # ✅ Convert 'MM:SS' format to total seconds played
-    def minutes_to_seconds(time_str):
+    # ✅ Convert 'MM:SS' format to total minutes played
+    def minutes_to_float(time_str):
         if time_str == "0:00" or not time_str:
             return 0
         mm, ss = map(int, time_str.split(":"))
-        return mm * 60 + ss  # Convert minutes + seconds to total seconds
+        return mm + (ss / 60)  # Convert minutes + seconds to float format
 
-    df["Total Seconds"] = df["minutes_played"].apply(minutes_to_seconds)
+    # ✅ Apply conversion for Player and League
+    df_player["Total Minutes"] = df_player["minutes_played"].apply(minutes_to_float)
+    df_league["Total Minutes"] = df_league["minutes_played"].apply(minutes_to_float)
 
-    # ✅ Sum stats and total time played
-    total_minutes_played = df["Total Seconds"].sum() / 60  # Convert back to minutes
-    total_points = df["points"].sum()
-    total_rebounds = df["rebounds_total"].sum()
-    total_assists = df["assists"].sum()
-    total_steals = df["steals"].sum()
-    total_blocks = df["blocks"].sum()
-    total_turnovers = df["turnovers"].sum()
-    total_fga = df["field_goals_attempted"].sum()
+    # ✅ Player Stats Calculation
+    total_minutes_player = df_player["Total Minutes"].sum()  # Sum all valid minutes
+    total_points_player = df_player["points"].sum()
+    total_rebounds_player = df_player["rebounds_total"].sum()
+    total_assists_player = df_player["assists"].sum()
+    total_steals_player = df_player["steals"].sum()
+    total_blocks_player = df_player["blocks"].sum()
+    total_turnovers_player = df_player["turnovers"].sum()
+    total_fga_player = df_player["field_goals_attempted"].sum()
 
-    # ✅ Scale stats per 40 minutes
-    if total_minutes_played > 0:
-        scale_factor = 40 / total_minutes_played
-        stats_per_40 = {
-            "PTS": total_points * scale_factor,
-            "REB": total_rebounds * scale_factor,
-            "AST": total_assists * scale_factor,
-            "STL": total_steals * scale_factor,
-            "BLK": total_blocks * scale_factor,
-            "TO": total_turnovers * scale_factor,
-            "FGA": total_fga * scale_factor,
-            "PPS": (total_points / (total_fga + 0.44 * total_turnovers)) if (total_fga + 0.44 * total_turnovers) > 0 else 0
+    # ✅ League Stats Calculation
+    total_minutes_league = df_league["Total Minutes"].sum()
+    total_points_league = df_league["points"].sum()
+    total_rebounds_league = df_league["rebounds_total"].sum()
+    total_assists_league = df_league["assists"].sum()
+    total_steals_league = df_league["steals"].sum()
+    total_blocks_league = df_league["blocks"].sum()
+    total_turnovers_league = df_league["turnovers"].sum()
+    total_fga_league = df_league["field_goals_attempted"].sum()
+
+    # ✅ Scale stats per 40 minutes for player
+    if total_minutes_player > 0:
+        scale_factor_player = 40 / total_minutes_player
+        stats_per_40_player = {
+            "Comparison": "Player per 40 min",
+            "PTS": total_points_player * scale_factor_player,
+            "REB": total_rebounds_player * scale_factor_player,
+            "AST": total_assists_player * scale_factor_player,
+            "STL": total_steals_player * scale_factor_player,
+            "BLK": total_blocks_player * scale_factor_player,
+            "TO": total_turnovers_player * scale_factor_player,
+            "FGA": total_fga_player * scale_factor_player,
+            "PPS": (total_points_player / (total_fga_player + 0.44 * total_turnovers_player)) if (total_fga_player + 0.44 * total_turnovers_player) > 0 else 0
         }
     else:
-        stats_per_40 = {
-            "PTS": 0, "REB": 0, "AST": 0, "STL": 0, "BLK": 0, "TO": 0, "FGA": 0, "PPS": 0
-        }
+        stats_per_40_player = { "Comparison": "Player per 40 min", "PTS": 0, "REB": 0, "AST": 0, "STL": 0, "BLK": 0, "TO": 0, "FGA": 0, "PPS": 0 }
 
-    # ✅ Convert dictionary to DataFrame
-    df_result = pd.DataFrame([stats_per_40])
-    df_result.insert(0, "Comparison", "Player per 40 min")  # Add label for clarity
+    # ✅ Scale stats per 40 minutes for league (normalized)
+    if total_minutes_league > 0:
+        scale_factor_league = 40 / (total_minutes_league / len(df_league))  # Normalize by number of players
+        stats_per_40_league = {
+            "Comparison": "League per 40 min",
+            "PTS": total_points_league * scale_factor_league / len(df_league),
+            "REB": total_rebounds_league * scale_factor_league / len(df_league),
+            "AST": total_assists_league * scale_factor_league / len(df_league),
+            "STL": total_steals_league * scale_factor_league / len(df_league),
+            "BLK": total_blocks_league * scale_factor_league / len(df_league),
+            "TO": total_turnovers_league * scale_factor_league / len(df_league),
+            "FGA": total_fga_league * scale_factor_league / len(df_league),
+            "PPS": (total_points_league / (total_fga_league + 0.44 * total_turnovers_league)) if (total_fga_league + 0.44 * total_turnovers_league) > 0 else 0
+        }
+    else:
+        stats_per_40_league = { "Comparison": "League per 40 min", "PTS": 0, "REB": 0, "AST": 0, "STL": 0, "BLK": 0, "TO": 0, "FGA": 0, "PPS": 0 }
+
+    # ✅ Convert to DataFrame
+    df_result = pd.DataFrame([stats_per_40_player, stats_per_40_league])
+
     return df_result
 
 def fetch_player_expected_stats(player_name):

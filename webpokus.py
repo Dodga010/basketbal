@@ -152,6 +152,7 @@ def fetch_player_game_stats(player_name):
 def fetch_player_stats_per_40(player_name):
     conn = sqlite3.connect(db_path)
 
+    # 🔍 Extract First Name Initial + Last Name Handling
     if ". " in player_name:
         first_initial, last_name = player_name.split(". ")
     else:
@@ -162,31 +163,32 @@ def fetch_player_stats_per_40(player_name):
     first_initial = first_initial.strip().lower()
     last_name = last_name.strip().lower()
 
-    # Get player's per 40 min stats
+    # ✅ Player-Specific Stats Per 40 Minutes
     query_player = """
     SELECT 
         (SUM(points) * 40.0) / NULLIF(SUM((CAST(substr(minutes_played, 1, instr(minutes_played, ':') - 1) AS REAL) * 60) + 
                CAST(substr(minutes_played, instr(minutes_played, ':') + 1) AS REAL)),0) AS 'PTS',
-        
+
         (SUM(rebounds_total) * 40.0) / NULLIF(SUM((CAST(substr(minutes_played, 1, instr(minutes_played, ':') - 1) AS REAL) * 60) + 
-                                  CAST(substr(minutes_played, instr(minutes_played, ':') + 1) AS REAL)),0) AS 'REB',
-        
+               CAST(substr(minutes_played, instr(minutes_played, ':') + 1) AS REAL)),0) AS 'REB',
+
         (SUM(assists) * 40.0) / NULLIF(SUM((CAST(substr(minutes_played, 1, instr(minutes_played, ':') - 1) AS REAL) * 60) + 
-                           CAST(substr(minutes_played, instr(minutes_played, ':') + 1) AS REAL)),0) AS 'AST',
+               CAST(substr(minutes_played, instr(minutes_played, ':') + 1) AS REAL)),0) AS 'AST',
 
         (SUM(steals) * 40.0) / NULLIF(SUM((CAST(substr(minutes_played, 1, instr(minutes_played, ':') - 1) AS REAL) * 60) + 
-                          CAST(substr(minutes_played, instr(minutes_played, ':') + 1) AS REAL)),0) AS 'STL',
+               CAST(substr(minutes_played, instr(minutes_played, ':') + 1) AS REAL)),0) AS 'STL',
 
         (SUM(blocks) * 40.0) / NULLIF(SUM((CAST(substr(minutes_played, 1, instr(minutes_played, ':') - 1) AS REAL) * 60) + 
-                          CAST(substr(minutes_played, instr(minutes_played, ':') + 1) AS REAL)),0) AS 'BLK',
+               CAST(substr(minutes_played, instr(minutes_played, ':') + 1) AS REAL)),0) AS 'BLK',
 
         (SUM(turnovers) * 40.0) / NULLIF(SUM((CAST(substr(minutes_played, 1, instr(minutes_played, ':') - 1) AS REAL) * 60) + 
-                             CAST(substr(minutes_played, instr(minutes_played, ':') + 1) AS REAL)),0) AS 'TO',
+               CAST(substr(minutes_played, instr(minutes_played, ':') + 1) AS REAL)),0) AS 'TO',
 
         (SUM(field_goals_attempted) * 40.0) / NULLIF(SUM((CAST(substr(minutes_played, 1, instr(minutes_played, ':') - 1) AS REAL) * 60) + 
-                                         CAST(substr(minutes_played, instr(minutes_played, ':') + 1) AS REAL)),0) AS 'FGA',
+               CAST(substr(minutes_played, instr(minutes_played, ':') + 1) AS REAL)),0) AS 'FGA',
 
-        (SUM(points) * 40.0) / NULLIF(SUM(field_goals_attempted + 0.44 * free_throws_attempted),0) AS 'PPS'
+        SUM(points) / NULLIF(SUM(field_goals_attempted + 0.44 * free_throws_attempted),0) AS 'PPS'
+
     FROM Players
     WHERE LOWER(SUBSTR(first_name, 1, 1)) = ?
       AND LOWER(last_name) = ?
@@ -194,38 +196,38 @@ def fetch_player_stats_per_40(player_name):
 
     df_player_40 = pd.read_sql(query_player, conn, params=(first_initial, last_name))
 
-    # Get league-wide per 40 min stats
+    # ✅ League-Wide Stats Per 40 Minutes
     query_league = """
     SELECT 
         (SUM(points) * 40.0) / NULLIF(SUM((CAST(substr(minutes_played, 1, instr(minutes_played, ':') - 1) AS REAL) * 60) + 
                CAST(substr(minutes_played, instr(minutes_played, ':') + 1) AS REAL)),0) AS 'PTS',
-        
+
         (SUM(rebounds_total) * 40.0) / NULLIF(SUM((CAST(substr(minutes_played, 1, instr(minutes_played, ':') - 1) AS REAL) * 60) + 
-                                  CAST(substr(minutes_played, instr(minutes_played, ':') + 1) AS REAL)),0) AS 'REB',
-        
+               CAST(substr(minutes_played, instr(minutes_played, ':') + 1) AS REAL)),0) AS 'REB',
+
         (SUM(assists) * 40.0) / NULLIF(SUM((CAST(substr(minutes_played, 1, instr(minutes_played, ':') - 1) AS REAL) * 60) + 
-                           CAST(substr(minutes_played, instr(minutes_played, ':') + 1) AS REAL)),0) AS 'AST',
+               CAST(substr(minutes_played, instr(minutes_played, ':') + 1) AS REAL)),0) AS 'AST',
 
         (SUM(steals) * 40.0) / NULLIF(SUM((CAST(substr(minutes_played, 1, instr(minutes_played, ':') - 1) AS REAL) * 60) + 
-                          CAST(substr(minutes_played, instr(minutes_played, ':') + 1) AS REAL)),0) AS 'STL',
+               CAST(substr(minutes_played, instr(minutes_played, ':') + 1) AS REAL)),0) AS 'STL',
 
         (SUM(blocks) * 40.0) / NULLIF(SUM((CAST(substr(minutes_played, 1, instr(minutes_played, ':') - 1) AS REAL) * 60) + 
-                          CAST(substr(minutes_played, instr(minutes_played, ':') + 1) AS REAL)),0) AS 'BLK',
+               CAST(substr(minutes_played, instr(minutes_played, ':') + 1) AS REAL)),0) AS 'BLK',
 
         (SUM(turnovers) * 40.0) / NULLIF(SUM((CAST(substr(minutes_played, 1, instr(minutes_played, ':') - 1) AS REAL) * 60) + 
-                             CAST(substr(minutes_played, instr(minutes_played, ':') + 1) AS REAL)),0) AS 'TO',
+               CAST(substr(minutes_played, instr(minutes_played, ':') + 1) AS REAL)),0) AS 'TO',
 
         (SUM(field_goals_attempted) * 40.0) / NULLIF(SUM((CAST(substr(minutes_played, 1, instr(minutes_played, ':') - 1) AS REAL) * 60) + 
-                                         CAST(substr(minutes_played, instr(minutes_played, ':') + 1) AS REAL)),0) AS 'FGA',
+               CAST(substr(minutes_played, instr(minutes_played, ':') + 1) AS REAL)),0) AS 'FGA',
 
-        (SUM(points) * 40.0) / NULLIF(SUM(field_goals_attempted + 0.44 * free_throws_attempted),0) AS 'PPS'
+        SUM(points) / NULLIF(SUM(field_goals_attempted + 0.44 * free_throws_attempted),0) AS 'PPS'
+
     FROM Players;
     """
 
     df_league_40 = pd.read_sql(query_league, conn)
     conn.close()
 
-    # Combine into a single table for easy comparison
     df_player_40.insert(0, "Comparison", "Player per 40 min")
     df_league_40.insert(0, "Comparison", "League per 40 min")
     df_combined = pd.concat([df_player_40, df_league_40], ignore_index=True)

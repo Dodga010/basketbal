@@ -19,7 +19,7 @@ def table_exists(table_name):
     conn.close()
     return exists
 
-# ✅ Fetch team data (averages per game)
+# Fetch team data (averages per game)
 def fetch_team_data():
     if not table_exists("Teams"):
         st.error("⚠️ Error: 'Teams' table not found in the database.")
@@ -31,15 +31,15 @@ def fetch_team_data():
         name AS Team,
         CASE WHEN tm = 1 THEN 'Home' ELSE 'Away' END AS Location,
         COUNT(game_id) AS Games_Played,
-        AVG(p1_score + p2_score + p3_score + p4_score) AS Avg_Points,
-        AVG(fouls_total) AS Avg_Fouls,
-        AVG(free_throws_made) AS Avg_Free_Throws,
-        AVG(field_goals_made) AS Avg_Field_Goals,
-        AVG(assists) AS Avg_Assists,
-        AVG(rebounds_total) AS Avg_Rebounds,
-        AVG(steals) AS Avg_Steals,
-        AVG(turnovers) AS Avg_Turnovers,
-        AVG(blocks) AS Avg_Blocks
+        ROUND(AVG(p1_score + p2_score + p3_score + p4_score), 2) AS Avg_Points,
+        ROUND(AVG(fouls_total), 2) AS Avg_Fouls,
+        ROUND(AVG(free_throws_made), 2) AS Avg_Free_Throws,
+        ROUND(AVG(field_goals_made), 2) AS Avg_Field_Goals,
+        ROUND(AVG(assists), 2) AS Avg_Assists,
+        ROUND(AVG(rebounds_total), 2) AS Avg_Rebounds,
+        ROUND(AVG(steals), 2) AS Avg_Steals,
+        ROUND(AVG(turnovers), 2) AS Avg_Turnovers,
+        ROUND(AVG(blocks), 2) AS Avg_Blocks
     FROM Teams
     GROUP BY name, tm
     ORDER BY Avg_Points DESC;
@@ -432,7 +432,6 @@ def generate_shot_chart(player_name):
     st.pyplot(fig)
 
 # ✅ Main Function
-# ✅ Main Function
 def main():
     st.title("🏀 Basketball Stats Viewer")
     page = st.sidebar.selectbox("📌 Choose a page", ["Team Season Boxscore", "Head-to-Head Comparison", "Referee Stats", "Shot Chart"])
@@ -487,70 +486,69 @@ def main():
             st.plotly_chart(fig_referee)
 
     elif page == "Shot Chart":
-    	st.subheader("🎯 Player Shot Chart")
-    players = fetch_players()
-    
-    if not players:
-        st.warning("No player data available.")
-    else:
-        player_name = st.selectbox("Select a Player", players)
-        generate_shot_chart(player_name)
+        st.subheader("🎯 Player Shot Chart")
+        players = fetch_players()
 
-        # Mean stats per game
-        player_stats = fetch_player_stats(player_name)
-        if not player_stats.empty:
-            st.subheader(f"📊 {player_name} - Average Stats per Game")
-            st.dataframe(player_stats.round(1).style.format({
-    			"PTS": "{:.1f}",
-    			"FG%": "{:.1f}%",
-    			"3P%": "{:.1f}%",
-    			"2P%": "{:.1f}%",
-    			"FT%": "{:.1f}%",
-    			"PPS": "{:.2f}"
-			}))
+        if not players:
+            st.warning("No player data available.")
         else:
-            st.warning(f"No statistics available for {player_name}.")
+            player_name = st.selectbox("Select a Player", players)
+            generate_shot_chart(player_name)
 
-        # Game-by-game stats
-        player_game_stats = fetch_player_game_stats(player_name)
-        if not player_game_stats.empty:
-            st.subheader(f"📋 {player_name} - Game by Game Statistics")
-            mean_values = player_game_stats.mean(numeric_only=True)
-            mean_values['Game ID'] = 'Average'
-            mean_values['MIN'] = '-'
-            player_game_stats_with_mean = pd.concat([player_game_stats, mean_values.to_frame().T], ignore_index=True)
-            st.dataframe(player_game_stats_with_mean.style.format({
-                "FG%": "{:.1%}",
-                "3P%": "{:.1%}",
-                "2P%": "{:.1%}",
-                "FT%": "{:.1%}",
-                "PPS": "{:.2f}",
-                "PTS": "{:.1f}",
-                "REB": "{:.1f}",
-                "AST": "{:.1f}",
-                "STL": "{:.1f}",
-                "BLK": "{:.1f}",
-                "TO": "{:.1f}"
-            }))
-        else:
-            st.warning(f"No game-by-game stats available for {player_name}.")
+            # Mean stats per game
+            player_stats = fetch_player_stats(player_name)
+            if not player_stats.empty:
+                st.subheader(f"📊 {player_name} - Average Stats per Game")
+                st.dataframe(player_stats.round(1).style.format({
+                    "PTS": "{:.1f}",
+                    "FG%": "{:.1f}%",
+                    "3P%": "{:.1f}%",
+                    "2P%": "{:.1f}%",
+                    "FT%": "{:.1f}%",
+                    "PPS": "{:.2f}"
+                }))
+            else:
+                st.warning(f"No statistics available for {player_name}.")
 
-             # ✅ Correct function name
-        player_vs_league_40 = fetch_player_and_league_stats_per_40(player_name)  # This was the issue
-        if not player_vs_league_40.empty:
-            st.subheader(f"📊 {player_name} vs. League - Stats per 40 Minutes")
-            st.dataframe(player_vs_league_40.style.format({
-                "PTS": "{:.1f}",
-                "REB": "{:.1f}",
-                "AST": "{:.1f}",
-                "STL": "{:.1f}",
-                "BLK": "{:.1f}",
-                "TO": "{:.1f}",
-                "FGA": "{:.1f}",
-                "PPS": "{:.2f}"
-            }))
-        else:
-            st.warning(f"No per-40 stats available for {player_name}.")
+            # Game-by-game stats
+            player_game_stats = fetch_player_game_stats(player_name)
+            if not player_game_stats.empty:
+                st.subheader(f"📋 {player_name} - Game by Game Statistics")
+                mean_values = player_game_stats.mean(numeric_only=True)
+                mean_values['Game ID'] = 'Average'
+                mean_values['MIN'] = '-'
+                player_game_stats_with_mean = pd.concat([player_game_stats, mean_values.to_frame().T], ignore_index=True)
+                st.dataframe(player_game_stats_with_mean.style.format({
+                    "FG%": "{:.1%}",
+                    "3P%": "{:.1%}",
+                    "2P%": "{:.1%}",
+                    "FT%": "{:.1%}",
+                    "PPS": "{:.2f}",
+                    "PTS": "{:.1f}",
+                    "REB": "{:.1f}",
+                    "AST": "{:.1f}",
+                    "STL": "{:.1f}",
+                    "BLK": "{:.1f}",
+                    "TO": "{:.1f}"
+                }))
+            else:
+                st.warning(f"No game-by-game stats available for {player_name}.")
+
+            player_vs_league_40 = fetch_player_and_league_stats_per_40(player_name)
+            if not player_vs_league_40.empty:
+                st.subheader(f"📊 {player_name} vs. League - Stats per 40 Minutes")
+                st.dataframe(player_vs_league_40.style.format({
+                    "PTS": "{:.1f}",
+                    "REB": "{:.1f}",
+                    "AST": "{:.1f}",
+                    "STL": "{:.1f}",
+                    "BLK": "{:.1f}",
+                    "TO": "{:.1f}",
+                    "FGA": "{:.1f}",
+                    "PPS": "{:.2f}"
+                }))
+            else:
+                st.warning(f"No per-40 stats available for {player_name}.")
 
 if __name__ == "__main__":
     main()

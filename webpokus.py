@@ -185,6 +185,67 @@ def fetch_league_average_stats():
     conn.close()
     return df
     
+def fetch_player_expected_stats(player_name):
+    conn = sqlite3.connect(db_path)
+
+    if ". " in player_name:
+        first_initial, last_name = player_name.split(". ")
+    else:
+        parts = player_name.split(" ")
+        first_initial = parts[0][0]
+        last_name = " ".join(parts[1:])
+
+    first_initial = first_initial.strip().lower()
+    last_name = last_name.strip().lower()
+
+    # Query to get total minutes played by the player
+    query_player_minutes = """
+    SELECT SUM((CAST(substr(minutes_played, 1, instr(minutes_played, ':') - 1) AS REAL) * 60) + 
+               CAST(substr(minutes_played, instr(minutes_played, ':') + 1) AS REAL)) AS total_seconds
+    FROM Players
+    WHERE LOWER(SUBSTR(first_name, 1, 1)) = ? 
+      AND LOWER(last_name) = ?;
+    """
+    
+    df_player_minutes = pd.read_sql(query_player_minutes, conn, params=(first_initial, last_name))
+    total_seconds = df_player_minutes.iloc[0, 0]  # Get the total seconds played
+
+    if total_seconds is None or total_seconds == 0:
+        conn.close()
+        return pd.DataFrame()  # No minutes played, return empty DataFrame
+
+    total_minutes = total_seconds / 60  # Convert seconds to minutes
+
+    # Query to get league-wide per-minute averages
+    query_league_per_minute = """
+    SELECT 
+        SUM(points) / SUM((CAST(substr(minutes_played, 1, instr(minutes_played, ':') - 1) AS REAL) * 60) + 
+                          CAST(substr(minutes_played, instr(minutes_played, ':') + 1) AS REAL)) AS 'PTS',
+        SUM(rebounds_total) / SUM((CAST(substr(minutes_played, 1, instr(minutes_played, ':') - 1) AS REAL) * 60) + 
+                                  CAST(substr(minutes_played, instr(minutes_played, ':') + 1) AS REAL)) AS 'REB',
+        SUM(assists) / SUM((CAST(substr(minutes_played, 1, instr(minutes_played, ':') - 1) AS REAL) * 60) + 
+                           CAST(substr(minutes_played, instr(minutes_played, ':') + 1) AS REAL)) AS 'AST',
+        SUM(steals) / SUM((CAST(substr(minutes_played, 1, instr(minutes_played, ':') - 1) AS REAL) * 60) + 
+                          CAST(substr(minutes_played, instr(minutes_played, ':') + 1) AS REAL)) AS 'STL',
+        SUM(blocks) / SUM((CAST(substr(minutes_played, 1, instr(minutes_played, ':') - 1) AS REAL) * 60) + 
+                          CAST(substr(minutes_played, instr(minutes_played, ':') + 1) AS REAL)) AS 'BLK',
+        SUM(turnovers) / SUM((CAST(substr(minutes_played, 1, instr(minutes_played, ':') - 1) AS REAL) * 60) + 
+                             CAST(substr(minutes_played, instr(minutes_played, ':') + 1) AS REAL)) AS 'TO',
+        SUM(field_goals_attempted) / SUM((CAST(substr(minutes_played, 1, instr(minutes_played, ':') - 1) AS REAL) * 60) + 
+                                         CAST(substr(minutes_played, instr(minutes_played, ':') + 1) AS REAL)) AS 'FGA',
+        SUM(points) / SUM(field_goals_attempted + 0.44 * free_throws_attempted) AS 'PPS'
+    FROM Players;
+    """
+
+    df_league_per_minute = pd.read_sql(query_league_per_minute, conn)
+    conn.close()
+
+    # Multiply per-minute stats by the player's total minutes played
+    df_expected_stats = df_league_per_minute * total_minutes
+    df_expected_stats.insert(0, "Minutes Played", round(total_minutes, 1))
+
+    return df_expected_stats
+    
 def fetch_player_stats(player_name):
     conn = sqlite3.connect(db_path)
 
@@ -356,37 +417,70 @@ def main():
             st.plotly_chart(fig_referee)
 
     elif page == "Shot Chart":
-        st.subheader("🎯 Player Shot Chart")
-        players = fetch_players()
-        if not players:
-            st.warning("No player data available.")
+    st.subheader("🎯 Player Shot Chart")
+    players = fetch_players()
+    
+    if not players:
+        st.warning("No player data available.")
+    else:
+        player_name = st.selectbox("Select a Player", players)
+        generate_shot_chart(player_name)
+
+        # Mean stats per game
+        player_stats = fetch_player_stats(player_name)
+        if not player_stats.empty:
+            st.subheader(f"📊 {player_name} - Average Stats per Game")
+            st.dataframe(player_stats.style.format({
+                "PTS": "{:.1f}",
+                "FG%": "{:.1%}",
+                "3P%": "{:.1%}",
+                "2P%": "{:.1%}",
+                "FT%": "{:.1%}",
+                "PPS": "{:.2f}"
+            }))
         else:
-            player_name = st.selectbox("Select a Player", players)
-            generate_shot_chart(player_name)
-            player_stats = fetch_player_stats(player_name)
-            if not player_stats.empty:
-                st.subheader(f"📊 {player_name} - Average Stats per Game")
-                league_avg_stats = fetch_league_average_stats()
-                league_avg_stats.insert(0, "Comparison", "League Average")
-                player_stats.insert(0, "Comparison", player_name)
-                combined_stats = pd.concat([player_stats, league_avg_stats], ignore_index=True)
-                st.dataframe(combined_stats.style.format({
-                    "PTS": "{:.1f}", "FG%": "{:.1%}", "3P%": "{:.1%}", "2P%": "{:.1%}", "FT%": "{:.1%}", "PPS": "{:.2f}"
-                }))
-            else:
-                st.warning(f"No statistics available for {player_name}.")
-            player_game_stats = fetch_player_game_stats(player_name)
-            if not player_game_stats.empty:
-                st.subheader(f"📋 {player_name} - Game by Game Statistics")
-                mean_values = player_game_stats.mean(numeric_only=True)
-                mean_values['Game ID'] = 'Player Average'
-                mean_values['MIN'] = '-'
-                player_game_stats_with_mean = pd.concat([player_game_stats, mean_values.to_frame().T], ignore_index=True)
-                st.dataframe(player_game_stats_with_mean.style.format({
-                    "FG%": "{:.1%}", "3P%": "{:.1%}", "2P%": "{:.1%}", "FT%": "{:.1%}", "PPS": "{:.2f}", "PTS": "{:.1f}", "FGM": "{:.1f}", "FGA": "{:.1f}", "3PM": "{:.1f}", "3PA": "{:.1f}", "2PM": "{:.1f}", "2PA": "{:.1f}", "FTM": "{:.1f}", "FTA": "{:.1f}", "REB": "{:.1f}", "AST": "{:.1f}", "STL": "{:.1f}", "BLK": "{:.1f}", "TO": "{:.1f}"
-                }))
-            else:
-                st.warning(f"No game-by-game stats available for {player_name}.")
+            st.warning(f"No statistics available for {player_name}.")
+
+        # Game-by-game stats
+        player_game_stats = fetch_player_game_stats(player_name)
+        if not player_game_stats.empty:
+            st.subheader(f"📋 {player_name} - Game by Game Statistics")
+            mean_values = player_game_stats.mean(numeric_only=True)
+            mean_values['Game ID'] = 'Average'
+            mean_values['MIN'] = '-'
+            player_game_stats_with_mean = pd.concat([player_game_stats, mean_values.to_frame().T], ignore_index=True)
+            st.dataframe(player_game_stats_with_mean.style.format({
+                "FG%": "{:.1%}",
+                "3P%": "{:.1%}",
+                "2P%": "{:.1%}",
+                "FT%": "{:.1%}",
+                "PPS": "{:.2f}",
+                "PTS": "{:.1f}",
+                "REB": "{:.1f}",
+                "AST": "{:.1f}",
+                "STL": "{:.1f}",
+                "BLK": "{:.1f}",
+                "TO": "{:.1f}"
+            }))
+        else:
+            st.warning(f"No game-by-game stats available for {player_name}.")
+
+        # 🚀 Expected stats for an average player in the same minutes played
+        expected_stats = fetch_player_expected_stats(player_name)
+        if not expected_stats.empty:
+            st.subheader(f"📊 Expected Stats for an Average Player in {expected_stats.iloc[0, 0]} Minutes")
+            st.dataframe(expected_stats.style.format({
+                "PTS": "{:.1f}",
+                "REB": "{:.1f}",
+                "AST": "{:.1f}",
+                "STL": "{:.1f}",
+                "BLK": "{:.1f}",
+                "TO": "{:.1f}",
+                "FGA": "{:.1f}",
+                "PPS": "{:.2f}"
+            }))
+        else:
+            st.warning(f"No expected stats available for {player_name}.")
 
 if __name__ == "__main__":
     main()

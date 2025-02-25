@@ -535,11 +535,11 @@ def main():
         else:
             st.warning(f"No game-by-game stats available for {player_name}.")
 
-               # 🚀 Add per 40-minute stats table
-        player_per_40_stats = fetch_player_stats_per_40(player_name)
-        if not player_per_40_stats.empty:
+             # ✅ Correct function name
+        player_vs_league_40 = fetch_player_and_league_stats_per_40(player_name)  # This was the issue
+        if not player_vs_league_40.empty:
             st.subheader(f"📊 {player_name} vs. League - Stats per 40 Minutes")
-            st.dataframe(player_per_40_stats.style.format({
+            st.dataframe(player_vs_league_40.style.format({
                 "PTS": "{:.1f}",
                 "REB": "{:.1f}",
                 "AST": "{:.1f}",
@@ -550,7 +550,7 @@ def main():
                 "PPS": "{:.2f}"
             }))
         else:
-            st.warning(f"No per 40-minute stats available for {player_name}.")
+            st.warning(f"No per-40 stats available for {player_name}.")
 
 if __name__ == "__main__":
     main()

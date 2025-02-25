@@ -500,14 +500,14 @@ def main():
         player_stats = fetch_player_stats(player_name)
         if not player_stats.empty:
             st.subheader(f"📊 {player_name} - Average Stats per Game")
-            st.dataframe(player_stats.style.format({
-                "PTS": "{:.1f}",
-                "FG%": "{:.1%}",
-                "3P%": "{:.1%}",
-                "2P%": "{:.1%}",
-                "FT%": "{:.1%}",
-                "PPS": "{:.2f}"
-            }))
+            st.dataframe(player_stats.round(1).style.format({
+    			"PTS": "{:.1f}",
+    			"FG%": "{:.1f}%",
+    			"3P%": "{:.1f}%",
+    			"2P%": "{:.1f}%",
+    			"FT%": "{:.1f}%",
+    			"PPS": "{:.2f}"
+			}))
         else:
             st.warning(f"No statistics available for {player_name}.")
 

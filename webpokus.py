@@ -508,32 +508,32 @@ def main():
                 st.warning(f"No statistics available for {player_name}.")
 
             # Game-by-game stats
-player_game_stats = fetch_player_game_stats(player_name)
-if not player_game_stats.empty:
-    st.subheader(f"📋 {player_name} - Game by Game Statistics")
-    mean_values = player_game_stats.mean(numeric_only=True)
-    mean_values['Game ID'] = 'Average'
-    mean_values['MIN'] = '-'
-    player_game_stats_with_mean = pd.concat([player_game_stats, mean_values.to_frame().T], ignore_index=True)
+	player_game_stats = fetch_player_game_stats(player_name)
+	if not player_game_stats.empty:
+    		st.subheader(f"📋 {player_name} - Game by Game Statistics")
+		mean_values = player_game_stats.mean(numeric_only=True)
+    		mean_values['Game ID'] = 'Average'
+    		mean_values['MIN'] = '-'
+    		player_game_stats_with_mean = pd.concat([player_game_stats, mean_values.to_frame().T], ignore_index=True)
 
-    # Apply formatting to all numeric columns
-    formatter = {
-        "FG%": "{:.3f}".format,
-        "3P%": "{:.3f}".format,
-        "2P%": "{:.3f}".format,
-        "FT%": "{:.3f}".format,
-        "PPS": "{:.3f}".format,
-        "PTS": "{:.3f}".format,
-        "REB": "{:.3f}".format,
-        "AST": "{:.3f}".format,
-        "STL": "{:.3f}".format,
-        "BLK": "{:.3f}".format,
-        "TO": "{:.3f}".format
-    }
+	    # Apply formatting to all numeric columns
+	    formatter = {
+	        "FG%": "{:.3f}".format,
+	        "3P%": "{:.3f}".format,
+	        "2P%": "{:.3f}".format,
+	        "FT%": "{:.3f}".format,
+	        "PPS": "{:.3f}".format,
+	        "PTS": "{:.3f}".format,
+	        "REB": "{:.3f}".format,
+	        "AST": "{:.3f}".format,
+	        "STL": "{:.3f}".format,
+	        "BLK": "{:.3f}".format,
+	        "TO": "{:.3f}".format
+	    }
 
-    st.dataframe(player_game_stats_with_mean.style.format(formatter))
-else:
-    st.warning(f"No game-by-game stats available for {player_name}.")
+	    st.dataframe(player_game_stats_with_mean.style.format(formatter))
+	else:
+	    st.warning(f"No game-by-game stats available for {player_name}.")
 
             player_vs_league_40 = fetch_player_and_league_stats_per_40(player_name)
             if not player_vs_league_40.empty:

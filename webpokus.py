@@ -542,7 +542,7 @@ def main():
             st.warning(f"No data available for {selected_stat} ({game_type} games)")
 
         # Add Assists vs Turnovers graph
-        assists_vs_turnovers_df = fetch_assists_vs_turnovers()
+        assists_vs_turnovers_df = fetch_assists_vs_turnovers(game_type)
         if not assists_vs_turnovers_df.empty:
             plot_assists_vs_turnovers(assists_vs_turnovers_df, game_type)
         else:

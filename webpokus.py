@@ -508,7 +508,7 @@ def main():
                 st.warning(f"No statistics available for {player_name}.")
 
             # Game-by-game stats
-	player_game_stats = fetch_player_game_stats(player_name)
+		player_game_stats = fetch_player_game_stats(player_name)
 	if not player_game_stats.empty:
     		st.subheader(f"📋 {player_name} - Game by Game Statistics")
 		mean_values = player_game_stats.mean(numeric_only=True)

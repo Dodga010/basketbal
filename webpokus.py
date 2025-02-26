@@ -6,6 +6,7 @@ import plotly.express as px
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
 import seaborn as sns
+import numpy as np
 
 # ✅ Define SQLite database path (works locally & online)
 db_path = os.path.join(os.path.dirname(__file__), "database.db")
@@ -48,18 +49,36 @@ def fetch_team_data():
     conn.close()
     return df
 
-# ✅ Fetch Assists vs Turnovers
-def fetch_assists_vs_turnovers():
+def fetch_assists_vs_turnovers(game_type):
     if not table_exists("Teams"):
         return pd.DataFrame()
 
     conn = sqlite3.connect(db_path)
-    query = """
-    SELECT name AS Team, AVG(assists) AS Avg_Assists, AVG(turnovers) AS Avg_Turnovers
-    FROM Teams
-    GROUP BY name
-    ORDER BY Avg_Assists DESC;
-    """
+    
+    if game_type == 'Home':
+        query = """
+        SELECT name AS Team, AVG(assists) AS Avg_Assists, AVG(turnovers) AS Avg_Turnovers
+        FROM Teams
+        WHERE tm = 1
+        GROUP BY name
+        ORDER BY Avg_Assists DESC;
+        """
+    elif game_type == 'Away':
+        query = """
+        SELECT name AS Team, AVG(assists) AS Avg_Assists, AVG(turnovers) AS Avg_Turnovers
+        FROM Teams
+        WHERE tm = 0
+        GROUP BY name
+        ORDER BY Avg_Assists DESC;
+        """
+    else:
+        query = """
+        SELECT name AS Team, AVG(assists) AS Avg_Assists, AVG(turnovers) AS Avg_Turnovers
+        FROM Teams
+        GROUP BY name
+        ORDER BY Avg_Assists DESC;
+        """
+
     df = pd.read_sql(query, conn)
     conn.close()
     return df
@@ -258,11 +277,21 @@ def fetch_player_and_league_stats_per_40(player_name):
 def plot_assists_vs_turnovers(data, game_type):
     st.subheader(f"📊 Assists vs Turnovers ({game_type} games)")
     fig, ax = plt.subplots(figsize=(10, 6))
-    sns.scatterplot(data=data, x="Avg_Turnovers", y="Avg_Assists", hue="Team", s=200, ax=ax)  # Increase point size
+
+    # Scatter plot
+    sns.scatterplot(data=data, x="Avg_Turnovers", y="Avg_Assists", hue="Team", s=200, ax=ax)
+
+    # Add mesh grid
+    x_min, x_max = data["Avg_Turnovers"].min() - 1, data["Avg_Turnovers"].max() + 1
+    y_min, y_max = data["Avg_Assists"].min() - 1, data["Avg_Assists"].max() + 1
+    xx, yy = np.meshgrid(np.arange(x_min, x_max, 0.1), np.arange(y_min, y_max, 0.1))
+    ax.plot(xx, yy, linestyle='--', color='grey', alpha=0.5)
+
     ax.set_xlabel("Average Turnovers per Game")
     ax.set_ylabel("Average Assists per Game")
     ax.set_title(f"Assists vs Turnovers ({game_type} games)")
     st.pyplot(fig)
+
 
 def fetch_player_expected_stats(player_name):
     conn = sqlite3.connect(db_path)

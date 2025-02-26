@@ -284,7 +284,7 @@ def plot_assists_vs_turnovers(data, game_type):
     # Add mesh grid
     x_min, x_max = data["Avg_Turnovers"].min() - 1, data["Avg_Turnovers"].max() + 1
     y_min, y_max = data["Avg_Assists"].min() - 1, data["Avg_Assists"].max() + 1
-    xx, yy = np.meshgrid(np.arange(x_min, x_max, 0,5), np.arange(y_min, y_max, 0,5))
+    xx, yy = np.meshgrid(np.arange(x_min, x_max, 0,5), np.arange(y_min, y_max, 0.5))
     ax.plot(xx, yy, linestyle='-', color='grey', alpha=0.5)
 
     ax.set_xlabel("Average Turnovers per Game")

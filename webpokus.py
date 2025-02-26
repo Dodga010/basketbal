@@ -255,6 +255,15 @@ def fetch_player_and_league_stats_per_40(player_name):
 
     return df_result
 
+def plot_assists_vs_turnovers(data, game_type):
+    st.subheader(f"📊 Assists vs Turnovers ({game_type} games)")
+    fig, ax = plt.subplots(figsize=(10, 6))
+    sns.scatterplot(data=data, x="Avg_Turnovers", y="Avg_Assists", hue="Team", s=200, ax=ax)  # Increase point size
+    ax.set_xlabel("Average Turnovers per Game")
+    ax.set_ylabel("Average Assists per Game")
+    ax.set_title(f"Assists vs Turnovers ({game_type} games)")
+    st.pyplot(fig)
+
 def fetch_player_expected_stats(player_name):
     conn = sqlite3.connect(db_path)
 
@@ -458,51 +467,57 @@ def main():
             # Display the styled DataFrame
             st.dataframe(styled_df)
 
-            # Create columns for dropdown and radio buttons
             col1, col2 = st.columns(2)
 
-            with col1:
-                # Dropdown menu for selecting stats
-                stat_options = [
-                    'Avg_Points', 'Avg_Fouls', 'Avg_Free_Throws', 'Avg_Field_Goals', 
-                    'Avg_Assists', 'Avg_Rebounds', 'Avg_Steals', 'Avg_Turnovers', 'Avg_Blocks'
-                ]
-                selected_stat = st.selectbox("Select the statistic to display", stat_options)
+        with col1:
+            # Dropdown menu for selecting stats
+            stat_options = [
+                'Avg_Points', 'Avg_Fouls', 'Avg_Free_Throws', 'Avg_Field_Goals', 
+                'Avg_Assists', 'Avg_Rebounds', 'Avg_Steals', 'Avg_Turnovers', 'Avg_Blocks'
+            ]
+            selected_stat = st.selectbox("Select the statistic to display", stat_options)
 
-            with col2:
-                # Radio buttons for selecting combined, home, or away
-                game_type = st.radio("Select game type", ('Combined', 'Home', 'Away'))
+        with col2:
+            # Radio buttons for selecting combined, home, or away
+            game_type = st.radio("Select game type", ('Combined', 'Home', 'Away'))
 
-            # Filter the DataFrame based on the selected game type
-            if game_type == 'Home':
-                filtered_df = df[df['Location'] == 'Home']
-            elif game_type == 'Away':
-                filtered_df = df[df['Location'] == 'Away']
-            else:
-                filtered_df = df
+        # Filter the DataFrame based on the selected game type
+        if game_type == 'Home':
+            filtered_df = df[df['Location'] == 'Home']
+        elif game_type == 'Away':
+            filtered_df = df[df['Location'] == 'Away']
+        else:
+            filtered_df = df
 
-            # Plot the selected statistic
-            if not filtered_df.empty:
-                st.subheader(f"{selected_stat} Statistics ({game_type})")
-                fig, ax = plt.subplots(figsize=(10, 6))
-                sns.barplot(x='Team', y=selected_stat, data=filtered_df, ax=ax, palette='viridis', ci=None)
+        # Plot the selected statistic
+        if not filtered_df.empty:
+            st.subheader(f"{selected_stat} Statistics ({game_type} games)")
+            fig, ax = plt.subplots(figsize=(10, 6))
+            sns.barplot(x='Team', y=selected_stat, data=filtered_df, ax=ax, palette='viridis', ci=None)
 
-                # Adding data labels
-                for p in ax.patches:
-                    ax.annotate(format(p.get_height(), '.1f'),
-                                (p.get_x() + p.get_width() / 2., p.get_height()),
-                                ha='center', va='center',
-                                xytext=(0, 9),
-                                textcoords='offset points')
+            # Adding data labels
+            for p in ax.patches:
+                ax.annotate(format(p.get_height(), '.1f'),
+                            (p.get_x() + p.get_width() / 2., p.get_height()),
+                            ha='center', va='center',
+                            xytext=(0, 9),
+                            textcoords='offset points')
 
-                ax.set_xlabel("Team")
-                ax.set_ylabel(selected_stat)
-                ax.set_title(f"{selected_stat} per Team ({game_type})")
-                ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha='right')
-                sns.despine(top=True)  # Remove the top spine
-                st.pyplot(fig)
-            else:
-                st.warning(f"No data available for {selected_stat} ({game_type})")
+            ax.set_xlabel("Team")
+            ax.set_ylabel(selected_stat)
+            ax.set_title(f"{selected_stat} per Team ({game_type} games)")
+            ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha='right')
+            sns.despine(top=True)  # Remove the top spine
+            st.pyplot(fig)
+        else:
+            st.warning(f"No data available for {selected_stat} ({game_type} games)")
+
+        # Add Assists vs Turnovers graph
+        assists_vs_turnovers_df = fetch_assists_vs_turnovers()
+        if not assists_vs_turnovers_df.empty:
+            plot_assists_vs_turnovers(assists_vs_turnovers_df, game_type)
+        else:
+            st.warning("No data available for Assists vs Turnovers")                                  
 
 
 

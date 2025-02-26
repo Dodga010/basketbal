@@ -507,15 +507,14 @@ def main():
             else:
                 st.warning(f"No statistics available for {player_name}.")
 
-            # Game-by-game stats
-		player_game_stats = fetch_player_game_stats(player_name)
+	player_game_stats = fetch_player_game_stats(player_name)
 	if not player_game_stats.empty:
-    		st.subheader(f"📋 {player_name} - Game by Game Statistics")
-		mean_values = player_game_stats.mean(numeric_only=True)
-    		mean_values['Game ID'] = 'Average'
-    		mean_values['MIN'] = '-'
-    		player_game_stats_with_mean = pd.concat([player_game_stats, mean_values.to_frame().T], ignore_index=True)
-
+	    st.subheader(f"📋 {player_name} - Game by Game Statistics")
+	    mean_values = player_game_stats.mean(numeric_only=True)
+	    mean_values['Game ID'] = 'Average'
+	    mean_values['MIN'] = '-'
+	    player_game_stats_with_mean = pd.concat([player_game_stats, mean_values.to_frame().T], ignore_index=True)
+	
 	    # Apply formatting to all numeric columns
 	    formatter = {
 	        "FG%": "{:.3f}".format,
@@ -530,27 +529,25 @@ def main():
 	        "BLK": "{:.3f}".format,
 	        "TO": "{:.3f}".format
 	    }
-
+	
 	    st.dataframe(player_game_stats_with_mean.style.format(formatter))
 	else:
 	    st.warning(f"No game-by-game stats available for {player_name}.")
-
-            player_vs_league_40 = fetch_player_and_league_stats_per_40(player_name)
-            if not player_vs_league_40.empty:
-                st.subheader(f"📊 {player_name} vs. League - Stats per 40 Minutes")
-                st.dataframe(player_vs_league_40.style.format({
-                    "PTS": "{:.3f}",
-                    "REB": "{:.3f}",
-                    "AST": "{:.3f}",
-                    "STL": "{:.3f}",
-                    "BLK": "{:.3f}",
-                    "TO": "{:.3f}",
-                    "FGA": "{:.3f}",
-                    "PPS": "{:.3f}"
-                }))
-            else:
-                st.warning(f"No per-40 stats available for {player_name}.")
-                st.warning(f"No per-40 stats available for {player_name}.")
-
+	
+	player_vs_league_40 = fetch_player_and_league_stats_per_40(player_name)
+	if not player_vs_league_40.empty:
+	    st.subheader(f"📊 {player_name} vs. League - Stats per 40 Minutes")
+	    st.dataframe(player_vs_league_40.style.format({
+	        "PTS": "{:.3f}",
+	        "REB": "{:.3f}",
+	        "AST": "{:.3f}",
+	        "STL": "{:.3f}",
+	        "BLK": "{:.3f}",
+	        "TO": "{:.3f}",
+	        "FGA": "{:.3f}",
+	        "PPS": "{:.3f}"
+	    }))
+	else:
+	    st.warning(f"No per-40 stats available for {player_name}.")
 if __name__ == "__main__":
     main()

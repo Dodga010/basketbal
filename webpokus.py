@@ -31,15 +31,15 @@ def fetch_team_data():
         name AS Team,
         CASE WHEN tm = 1 THEN 'Home' ELSE 'Away' END AS Location,
         COUNT(game_id) AS Games_Played,
-        ROUND(AVG(p1_score + p2_score + p3_score + p4_score), 2) AS Avg_Points,
-        ROUND(AVG(fouls_total), 2) AS Avg_Fouls,
-        ROUND(AVG(free_throws_made), 2) AS Avg_Free_Throws,
-        ROUND(AVG(field_goals_made), 2) AS Avg_Field_Goals,
-        ROUND(AVG(assists), 2) AS Avg_Assists,
-        ROUND(AVG(rebounds_total), 2) AS Avg_Rebounds,
-        ROUND(AVG(steals), 2) AS Avg_Steals,
-        ROUND(AVG(turnovers), 2) AS Avg_Turnovers,
-        ROUND(AVG(blocks), 2) AS Avg_Blocks
+        ROUND(AVG(p1_score + p2_score + p3_score + p4_score), 1) AS Avg_Points,
+        ROUND(AVG(fouls_total), 1) AS Avg_Fouls,
+        ROUND(AVG(free_throws_made), 1) AS Avg_Free_Throws,
+        ROUND(AVG(field_goals_made), 1) AS Avg_Field_Goals,
+        ROUND(AVG(assists), 1) AS Avg_Assists,
+        ROUND(AVG(rebounds_total), 1) AS Avg_Rebounds,
+        ROUND(AVG(steals), 1) AS Avg_Steals,
+        ROUND(AVG(turnovers), 1) AS Avg_Turnovers,
+        ROUND(AVG(blocks), 1) AS Avg_Blocks
     FROM Teams
     GROUP BY name, tm
     ORDER BY Avg_Points DESC;
@@ -335,13 +335,13 @@ def fetch_player_stats(player_name):
 
     ROUND(SUM(CAST(points AS REAL)) * 1.0 / NULLIF(COUNT(CASE WHEN minutes_played <> '0:00' THEN 1 END),0), 1) AS 'PTS',
 
-    ROUND(SUM(CAST(field_goals_made AS REAL)) * 100.0 / NULLIF(SUM(CAST(field_goals_attempted AS REAL)),0), 1) AS 'FG%',
+    ROUND(SUM(CAST(field_goals_made AS REAL)) / NULLIF(SUM(CAST(field_goals_attempted AS REAL)),0), 2) AS 'FG%',
     
-    ROUND(SUM(CAST(three_pointers_made AS REAL)) * 100.0 / NULLIF(SUM(CAST(three_pointers_attempted AS REAL)),0), 1) AS '3P%',
+    ROUND(SUM(CAST(three_pointers_made AS REAL)) / NULLIF(SUM(CAST(three_pointers_attempted AS REAL)),0), 2) AS '3P%',
     
-    ROUND(SUM(CAST(two_pointers_made AS REAL)) * 100.0 / NULLIF(SUM(CAST(two_pointers_attempted AS REAL)),0), 1) AS '2P%',
+    ROUND(SUM(CAST(two_pointers_made AS REAL)) / NULLIF(SUM(CAST(two_pointers_attempted AS REAL)),0), 2) AS '2P%',
     
-    ROUND(SUM(CAST(free_throws_made AS REAL)) * 100.0 / NULLIF(SUM(CAST(free_throws_attempted AS REAL)),0), 1) AS 'FT%',
+    ROUND(SUM(CAST(free_throws_made AS REAL)) / NULLIF(SUM(CAST(free_throws_attempted AS REAL)),0), 2) AS 'FT%',
     
     ROUND(SUM(CAST(rebounds_total AS REAL)) * 1.0 / NULLIF(COUNT(CASE WHEN minutes_played <> '0:00' THEN 1 END),0), 1) AS 'REB',
     
@@ -353,7 +353,7 @@ def fetch_player_stats(player_name):
     
     ROUND(SUM(CAST(turnovers AS REAL)) * 1.0 / NULLIF(COUNT(CASE WHEN minutes_played <> '0:00' THEN 1 END),0), 1) AS 'TO',
     
-    ROUND(SUM(CAST(points AS REAL)) / NULLIF(SUM(CAST(field_goals_attempted AS REAL) + 0.44 * CAST(free_throws_attempted AS REAL)),0), 2) AS 'PPS'
+    ROUND(SUM(CAST(points AS REAL)) / NULLIF(SUM(CAST(field_goals_attempted AS REAL) + 0.44 * CAST(free_throws_attempted AS REAL)),0), 3) AS 'PPS'
 
 	FROM Players
 	WHERE LOWER(SUBSTR(first_name, 1, 1)) = ?
@@ -440,7 +440,71 @@ def main():
         else:
             st.subheader("📊 Season Team Statistics (Averages Per Game)")
             numeric_cols = df.select_dtypes(include=['number']).columns
-            st.dataframe(df.style.format({col: "{:.3f}" for col in numeric_cols}))
+           
+            # Select numeric columns from the 4th column to the end
+            numeric_cols = df.columns[3:]
+
+            # Function to apply formatting and styling only to numeric columns from 4th column onward
+            def format_and_style(df):
+                styled_df = df.style.format({col: "{:.1f}" for col in numeric_cols})
+                for col in numeric_cols:
+                    styled_df = styled_df.highlight_max(subset=[col], color='lightgreen')
+                    styled_df = styled_df.background_gradient(subset=[col], cmap='Blues')
+                return styled_df
+
+            # Apply the formatting and styling function
+            styled_df = format_and_style(df)
+            
+            # Display the styled DataFrame
+            st.dataframe(styled_df)
+
+            # Create columns for dropdown and radio buttons
+            col1, col2 = st.columns(2)
+
+            with col1:
+                # Dropdown menu for selecting stats
+                stat_options = [
+                    'Avg_Points', 'Avg_Fouls', 'Avg_Free_Throws', 'Avg_Field_Goals', 
+                    'Avg_Assists', 'Avg_Rebounds', 'Avg_Steals', 'Avg_Turnovers', 'Avg_Blocks'
+                ]
+                selected_stat = st.selectbox("Select the statistic to display", stat_options)
+
+            with col2:
+                # Radio buttons for selecting combined, home, or away
+                game_type = st.radio("Select game type", ('Combined', 'Home', 'Away'))
+
+            # Filter the DataFrame based on the selected game type
+            if game_type == 'Home':
+                filtered_df = df[df['Location'] == 'Home']
+            elif game_type == 'Away':
+                filtered_df = df[df['Location'] == 'Away']
+            else:
+                filtered_df = df
+
+            # Plot the selected statistic
+            if not filtered_df.empty:
+                st.subheader(f"{selected_stat} Statistics ({game_type})")
+                fig, ax = plt.subplots(figsize=(10, 6))
+                sns.barplot(x='Team', y=selected_stat, data=filtered_df, ax=ax, palette='viridis', ci=None)
+
+                # Adding data labels
+                for p in ax.patches:
+                    ax.annotate(format(p.get_height(), '.1f'),
+                                (p.get_x() + p.get_width() / 2., p.get_height()),
+                                ha='center', va='center',
+                                xytext=(0, 9),
+                                textcoords='offset points')
+
+                ax.set_xlabel("Team")
+                ax.set_ylabel(selected_stat)
+                ax.set_title(f"{selected_stat} per Team ({game_type})")
+                ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha='right')
+                sns.despine(top=True)  # Remove the top spine
+                st.pyplot(fig)
+            else:
+                st.warning(f"No data available for {selected_stat} ({game_type})")
+
+
 
     elif page == "Head-to-Head Comparison":
         df = fetch_team_data()
@@ -507,47 +571,46 @@ def main():
             else:
                 st.warning(f"No statistics available for {player_name}.")
 
-	player_game_stats = fetch_player_game_stats(player_name)
-	if not player_game_stats.empty:
-	    st.subheader(f"📋 {player_name} - Game by Game Statistics")
-	    mean_values = player_game_stats.mean(numeric_only=True)
-	    mean_values['Game ID'] = 'Average'
-	    mean_values['MIN'] = '-'
-	    player_game_stats_with_mean = pd.concat([player_game_stats, mean_values.to_frame().T], ignore_index=True)
-	
-	    # Apply formatting to all numeric columns
-	    formatter = {
-	        "FG%": "{:.3f}".format,
-	        "3P%": "{:.3f}".format,
-	        "2P%": "{:.3f}".format,
-	        "FT%": "{:.3f}".format,
-	        "PPS": "{:.3f}".format,
-	        "PTS": "{:.3f}".format,
-	        "REB": "{:.3f}".format,
-	        "AST": "{:.3f}".format,
-	        "STL": "{:.3f}".format,
-	        "BLK": "{:.3f}".format,
-	        "TO": "{:.3f}".format
-	    }
-	
-	    st.dataframe(player_game_stats_with_mean.style.format(formatter))
-	else:
-	    st.warning(f"No game-by-game stats available for {player_name}.")
-	
-	player_vs_league_40 = fetch_player_and_league_stats_per_40(player_name)
-	if not player_vs_league_40.empty:
-	    st.subheader(f"📊 {player_name} vs. League - Stats per 40 Minutes")
-	    st.dataframe(player_vs_league_40.style.format({
-	        "PTS": "{:.3f}",
-	        "REB": "{:.3f}",
-	        "AST": "{:.3f}",
-	        "STL": "{:.3f}",
-	        "BLK": "{:.3f}",
-	        "TO": "{:.3f}",
-	        "FGA": "{:.3f}",
-	        "PPS": "{:.3f}"
-	    }))
-	else:
-	    st.warning(f"No per-40 stats available for {player_name}.")
+            # Game-by-game stats
+            player_game_stats = fetch_player_game_stats(player_name)
+            if not player_game_stats.empty:
+                st.subheader(f"📋 {player_name} - Game by Game Statistics")
+                mean_values = player_game_stats.mean(numeric_only=True)
+                mean_values['Game ID'] = 'Average'
+                mean_values['MIN'] = '-'
+                player_game_stats_with_mean = pd.concat([player_game_stats, mean_values.to_frame().T], ignore_index=True)
+                st.dataframe(player_game_stats_with_mean.style.format({
+                    "FG%": "{:.3f}%",
+                    "3P%": "{:.3f}%",
+                    "2P%": "{:.3f}%",
+                    "FT%": "{:.3f}%",
+                    "PPS": "{:.3f}",
+                    "PTS": "{:.3f}",
+                    "REB": "{:.3f}",
+                    "AST": "{:.3f}",
+                    "STL": "{:.3f}",
+                    "BLK": "{:.3f}",
+                    "TO": "{:.3f}"
+                }))
+            else:
+                st.warning(f"No game-by-game stats available for {player_name}.")
+
+            player_vs_league_40 = fetch_player_and_league_stats_per_40(player_name)
+            if not player_vs_league_40.empty:
+                st.subheader(f"📊 {player_name} vs. League - Stats per 40 Minutes")
+                st.dataframe(player_vs_league_40.style.format({
+                    "PTS": "{:.3f}",
+                    "REB": "{:.3f}",
+                    "AST": "{:.3f}",
+                    "STL": "{:.3f}",
+                    "BLK": "{:.3f}",
+                    "TO": "{:.3f}",
+                    "FGA": "{:.3f}",
+                    "PPS": "{:.3f}"
+                }))
+            else:
+                st.warning(f"No per-40 stats available for {player_name}.")
+                st.warning(f"No per-40 stats available for {player_name}.")
+
 if __name__ == "__main__":
     main()

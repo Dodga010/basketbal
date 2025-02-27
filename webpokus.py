@@ -69,6 +69,10 @@ def fetch_assists_vs_turnovers(game_type):
 
     df = pd.read_sql(query, conn)
     conn.close()
+    
+    # Print the query results for debugging
+    print(f"Query Results for {game_type} games: {df}")
+    
     return df
 
 # ✅ Fetch referee statistics

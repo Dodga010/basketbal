@@ -405,39 +405,50 @@ def plot_fg_percentage_by_distance(player_name, window_size=5):
         st.warning(f"No shot data found for {player_name}.")
         return
     
-    player_fg_percentage = calculate_fg_percentage_by_distance(df_player_shots, window_size=window_size)
-    league_fg_percentage = calculate_fg_percentage_by_distance(df_league_shots, window_size=window_size)
+    player_fg_percentage, player_shot_counts = calculate_fg_percentage_by_distance(df_player_shots, window_size=window_size)
+    league_fg_percentage, league_shot_counts = calculate_fg_percentage_by_distance(df_league_shots, window_size=window_size)
     
-    fig, ax = plt.subplots(figsize=(10, 6))
-    player_fg_percentage.plot(kind="line", ax=ax, label=f"{player_name} FG%")
-    league_fg_percentage.plot(kind="line", ax=ax, label="League Mean FG%", linestyle='--')
+    fig, ax1 = plt.subplots(figsize=(10, 6))
     
-    ax.set_xlabel("Distance from Basket (meters)")
-    ax.set_ylabel("Field Goal Percentage (%)")
-    ax.set_title(f"Field Goal Percentage by Distance for {player_name}")
-    ax.legend()
+    # Plot FG percentage
+    player_fg_percentage.plot(kind="line", ax=ax1, label=f"{player_name} FG%", color='blue')
+    league_fg_percentage.plot(kind="line", ax=ax1, label="League Mean FG%", linestyle='--', color='blue')
+    ax1.set_xlabel("Distance from Basket (meters)")
+    ax1.set_ylabel("Field Goal Percentage (%)", color='blue')
+    ax1.tick_params(axis='y', labelcolor='blue')
+    
+    # Plot shot frequency on secondary y-axis
+    ax2 = ax1.twinx()
+    player_shot_counts.plot(kind="bar", ax=ax2, alpha=0.3, color='gray', label=f"{player_name} Shot Count")
+    league_shot_counts.plot(kind="bar", ax=ax2, alpha=0.3, color='red', label="League Shot Count")
+    ax2.set_ylabel("Frequency of Shots", color='gray')
+    ax2.tick_params(axis='y', labelcolor='gray')
+    
+    # Set title and legends
+    fig.suptitle(f"Field Goal Percentage and Frequency by Distance for {player_name}")
+    fig.legend(loc="upper right", bbox_to_anchor=(1,1), bbox_transform=ax1.transAxes)
     
     st.pyplot(fig)
 
 from scipy.interpolate import UnivariateSpline
 
 def calculate_fg_percentage_by_distance(df_shots, bin_size=1, window_size=5):
-    # Calculate distance for each shot
     df_shots["distance"] = df_shots.apply(lambda row: calculate_distance_from_basket(row["x_coord"], row["y_coord"]), axis=1)
     df_shots["distance"] = df_shots["distance"].apply(convert_units_to_meters)
-    
-    # Create bins for distance
+
     bins = np.arange(0, df_shots["distance"].max() + bin_size, bin_size)
     df_shots["distance_bin"] = pd.cut(df_shots["distance"], bins, right=False)
-    
-    # Calculate field goal percentage for each bin
+
     fg_percentage = df_shots.groupby("distance_bin")["shot_result"].mean() * 100
     fg_percentage.index = fg_percentage.index.categories.left  # Convert index to numeric
     
-    # Apply moving average for smoothing
+    shot_counts = df_shots.groupby("distance_bin").size()
+    shot_counts.index = shot_counts.index.categories.left  # Convert index to numeric
+
+    # Apply moving average for smoothing FG%
     fg_percentage = fg_percentage.rolling(window=window_size, min_periods=1, center=True).mean()
     
-    return fg_percentage
+    return fg_percentage, shot_counts
 
 def plot_interpolated_distribution(x_smooth, y_smooth):
     # Create figure

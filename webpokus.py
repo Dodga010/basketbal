@@ -397,37 +397,39 @@ def calculate_interpolated_distribution(df_shots):
     
     return x_smooth, y_smooth
     
-def plot_fg_percentage_by_distance(player_name, window_size=5):
+def plot_fg_percentage_with_frequency(player_name, window_size=5):
     df_player_shots = fetch_shot_data(player_name)
     df_league_shots = fetch_league_shot_data()
-    
+
     if df_player_shots.empty:
         st.warning(f"No shot data found for {player_name}.")
         return
-    
+
     player_fg_percentage, player_shot_counts = calculate_fg_percentage_by_distance(df_player_shots, window_size=window_size)
     league_fg_percentage, league_shot_counts = calculate_fg_percentage_by_distance(df_league_shots, window_size=window_size)
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader(f"{player_name}'s Field Goal Percentage by Distance")
-        fig, ax1 = plt.subplots(figsize=(10, 6))
-        player_fg_percentage.plot(kind="line", ax=ax1, label=f"{player_name} FG%", color='blue')
-        league_fg_percentage.plot(kind="line", ax=ax1, label="League Mean FG%", linestyle='--', color='red')
-        ax1.set_xlabel("Distance from Basket (meters)")
-        ax1.set_ylabel("Field Goal Percentage (%)", color='blue')
-        ax1.tick_params(axis='y', labelcolor='blue')
-        
-        ax2 = ax1.twinx()
-        player_shot_counts.plot(kind="bar", ax=ax2, alpha=0.3, color='gray', label=f"{player_name} Shot Count")
-        ax2.set_ylabel("Frequency of Shots", color='gray')
-        ax2.tick_params(axis='y', labelcolor='gray')
-        
-        fig.suptitle(f"Field Goal Percentage and Frequency by Distance for {player_name}")
-        fig.legend(loc="upper right", bbox_to_anchor=(1,1), bbox_transform=ax1.transAxes)
-        
-        st.pyplot(fig)
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    # Create a color gradient based on the frequency
+    colors = plt.cm.viridis(player_shot_counts / player_shot_counts.max())
+
+    # Plot FG percentage with color gradient
+    for i in range(len(player_fg_percentage) - 1):
+        ax.plot(player_fg_percentage.index[i:i+2], player_fg_percentage[i:i+2], color=colors[i], linewidth=2)
+
+    ax.plot(league_fg_percentage.index, league_fg_percentage, linestyle='--', color='blue', label="League Mean FG%")
+    ax.set_xlabel("Distance from Basket (meters)")
+    ax.set_ylabel("Field Goal Percentage (%)")
+    ax.set_title(f"Field Goal Percentage by Distance for {player_name}")
+    ax.legend()
+
+    # Add color bar for frequency
+    sm = plt.cm.ScalarMappable(cmap=plt.cm.viridis, norm=plt.Normalize(vmin=0, vmax=player_shot_counts.max()))
+    sm.set_array([])
+    cbar = plt.colorbar(sm, ax=ax)
+    cbar.set_label('Frequency of Shots')
+
+    st.pyplot(fig)
 	    
 from scipy.interpolate import UnivariateSpline
 
@@ -830,18 +832,21 @@ def main():
             st.warning("No player data available.")
         else:
             player_name = st.selectbox("Select a Player", players)
-            generate_shot_chart(player_name)
-            # Display shot data with distance
-            display_shot_data_with_distance(player_name)
+        generate_shot_chart(player_name)
+        # Display shot data with distance
+        display_shot_data_with_distance(player_name)
 
-            # Calculate and plot interpolated distribution
-            df_shots_with_distance = fetch_shot_data(player_name)
-            if not df_shots_with_distance.empty:
-                df_shots_with_distance["distance_from_basket_units"] = df_shots_with_distance.apply(lambda row: calculate_distance_from_basket(row["x_coord"], row["y_coord"]), axis=1)
-                df_shots_with_distance["distance_from_basket_m"] = df_shots_with_distance["distance_from_basket_units"].apply(convert_units_to_meters)
-                x_smooth, y_smooth = calculate_interpolated_distribution(df_shots_with_distance)
-                plot_interpolated_distribution(player_name)
-                plot_fg_percentage_by_distance(player_name)
+        # Calculate and plot interpolated distribution
+        df_shots_with_distance = fetch_shot_data(player_name)
+        if not df_shots_with_distance.empty:
+            df_shots_with_distance["distance_from_basket_units"] = df_shots_with_distance.apply(lambda row: calculate_distance_from_basket(row["x_coord"], row["y_coord"]), axis=1)
+            df_shots_with_distance["distance_from_basket_m"] = df_shots_with_distance["distance_from_basket_units"].apply(convert_units_to_meters)
+            x_smooth, y_smooth = calculate_interpolated_distribution(df_shots_with_distance)
+            plot_interpolated_distribution(player_name)
+            plot_fg_percentage_by_distance(player_name)
+
+        # Plot FG percentage with frequency
+        plot_fg_percentage_with_frequency(player_name)
 
             # Mean stats per game
             player_stats = fetch_player_stats(player_name)

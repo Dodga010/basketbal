@@ -414,7 +414,7 @@ def plot_fg_percentage_by_distance(player_name, window_size=5):
         st.subheader(f"{player_name}'s Field Goal Percentage by Distance")
         fig, ax1 = plt.subplots(figsize=(10, 6))
         player_fg_percentage.plot(kind="line", ax=ax1, label=f"{player_name} FG%", color='blue')
-        league_fg_percentage.plot(kind="line", ax=ax1, label="League Mean FG%", linestyle='--', color='blue')
+        league_fg_percentage.plot(kind="line", ax=ax1, label="League Mean FG%", linestyle='--', color='red')
         ax1.set_xlabel("Distance from Basket (meters)")
         ax1.set_ylabel("Field Goal Percentage (%)", color='blue')
         ax1.tick_params(axis='y', labelcolor='blue')

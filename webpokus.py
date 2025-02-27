@@ -457,13 +457,21 @@ def plot_interpolated_distribution(player_name):
     
     x_smooth, y_smooth = calculate_interpolated_distribution(df_shots)
     
-    # Remove columns and plot graphs one below the other
+    # Fetch league shot data and calculate the interpolated distribution
+    df_league_shots = fetch_league_shot_data()
+    df_league_shots["distance_from_basket_units"] = df_league_shots.apply(lambda row: calculate_distance_from_basket(row["x_coord"], row["y_coord"]), axis=1)
+    df_league_shots["distance_from_basket_m"] = df_league_shots["distance_from_basket_units"].apply(convert_units_to_meters)
+    x_smooth_league, y_smooth_league = calculate_interpolated_distribution(df_league_shots)
+    
+    # Plot the percentage distribution for the player and the league mean
     st.subheader(f"Percentage Distribution of Shots for {player_name}")
     fig, ax = plt.subplots(figsize=(10, 6))
     ax.plot(x_smooth, y_smooth, label='Shot Distribution')
+    ax.plot(x_smooth_league, y_smooth_league, label='League Mean Distribution', linestyle='--')
     ax.set_xlabel("Distance from Basket (meters)")
     ax.set_ylabel("Density")
     ax.set_title("Percentage Distribution of Shots Based on Distance (Interpolated)")
+    ax.legend()
     st.pyplot(fig)
 
 

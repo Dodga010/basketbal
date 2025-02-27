@@ -843,7 +843,6 @@ def main():
                 df_shots_with_distance["distance_from_basket_m"] = df_shots_with_distance["distance_from_basket_units"].apply(convert_units_to_meters)
                 x_smooth, y_smooth = calculate_interpolated_distribution(df_shots_with_distance)
                 plot_interpolated_distribution(player_name)
-                plot_fg_percentage_by_distance(player_name)
 
             # Plot FG percentage with frequency
             plot_fg_percentage_with_frequency(player_name)

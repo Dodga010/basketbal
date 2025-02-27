@@ -844,9 +844,8 @@ def main():
             x_smooth, y_smooth = calculate_interpolated_distribution(df_shots_with_distance)
             plot_interpolated_distribution(player_name)
             plot_fg_percentage_by_distance(player_name)
-
-        # Plot FG percentage with frequency
-        plot_fg_percentage_with_frequency(player_name)
+            # Plot FG percentage with frequency
+     	    plot_fg_percentage_with_frequency(player_name)
 
             # Mean stats per game
             player_stats = fetch_player_stats(player_name)

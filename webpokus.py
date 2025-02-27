@@ -714,7 +714,7 @@ def main():
         else:
             st.subheader("📊 Season Team Statistics (Averages Per Game)")
             numeric_cols = df.select_dtypes(include=['number']).columns
-           
+
             # Select numeric columns from the 4th column to the end
             numeric_cols = df.columns[3:]
 
@@ -728,7 +728,7 @@ def main():
 
             # Apply the formatting and styling function
             styled_df = format_and_style(df)
-            
+
             # Display the styled DataFrame
             st.dataframe(styled_df)
 
@@ -737,7 +737,7 @@ def main():
             with col1:
                 # Dropdown menu for selecting stats
                 stat_options = [
-                    'Avg_Points', 'Avg_Fouls', 'Avg_Free_Throws', 'Avg_Field_Goals', 
+                    'Avg_Points', 'Avg_Fouls', 'Avg_Free_Throws', 'Avg_Field_Goals',
                     'Avg_Assists', 'Avg_Rebounds', 'Avg_Steals', 'Avg_Turnovers', 'Avg_Blocks'
                 ]
                 selected_stat = st.selectbox("Select the statistic to display", stat_options)
@@ -782,7 +782,7 @@ def main():
             if not assists_vs_turnovers_df.empty:
                 plot_assists_vs_turnovers(assists_vs_turnovers_df, game_type)
             else:
-                st.warning("No data available for Assists vs Turnovers")                                  
+                st.warning("No data available for Assists vs Turnovers")
 
     elif page == "Head-to-Head Comparison":
         df = fetch_team_data()
@@ -832,20 +832,21 @@ def main():
             st.warning("No player data available.")
         else:
             player_name = st.selectbox("Select a Player", players)
-        generate_shot_chart(player_name)
-        # Display shot data with distance
-        display_shot_data_with_distance(player_name)
+            generate_shot_chart(player_name)
+            # Display shot data with distance
+            display_shot_data_with_distance(player_name)
 
-        # Calculate and plot interpolated distribution
-        df_shots_with_distance = fetch_shot_data(player_name)
-        if not df_shots_with_distance.empty:
-            df_shots_with_distance["distance_from_basket_units"] = df_shots_with_distance.apply(lambda row: calculate_distance_from_basket(row["x_coord"], row["y_coord"]), axis=1)
-            df_shots_with_distance["distance_from_basket_m"] = df_shots_with_distance["distance_from_basket_units"].apply(convert_units_to_meters)
-            x_smooth, y_smooth = calculate_interpolated_distribution(df_shots_with_distance)
-            plot_interpolated_distribution(player_name)
-            plot_fg_percentage_by_distance(player_name)
+            # Calculate and plot interpolated distribution
+            df_shots_with_distance = fetch_shot_data(player_name)
+            if not df_shots_with_distance.empty:
+                df_shots_with_distance["distance_from_basket_units"] = df_shots_with_distance.apply(lambda row: calculate_distance_from_basket(row["x_coord"], row["y_coord"]), axis=1)
+                df_shots_with_distance["distance_from_basket_m"] = df_shots_with_distance["distance_from_basket_units"].apply(convert_units_to_meters)
+                x_smooth, y_smooth = calculate_interpolated_distribution(df_shots_with_distance)
+                plot_interpolated_distribution(player_name)
+                plot_fg_percentage_by_distance(player_name)
+
             # Plot FG percentage with frequency
-     	    plot_fg_percentage_with_frequency(player_name)
+            plot_fg_percentage_with_frequency(player_name)
 
             # Mean stats per game
             player_stats = fetch_player_stats(player_name)

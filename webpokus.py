@@ -901,7 +901,6 @@ def main():
                 }))
             else:
                 st.warning(f"No per-40 stats available for {player_name}.")
-                st.warning(f"No per-40 stats available for {player_name}.")
 
 if __name__ == "__main__":
     main()

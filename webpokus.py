@@ -8,6 +8,7 @@ import matplotlib.image as mpimg
 import seaborn as sns
 import numpy as np
 from scipy.interpolate import UnivariateSpline
+from scipy.ndimage import gaussian_filter1d
 
 # ✅ Define SQLite database path (works locally & online)
 db_path = os.path.join(os.path.dirname(__file__), "database.db")
@@ -390,11 +391,46 @@ def calculate_interpolated_distribution(df_shots):
     x = (bin_edges[:-1] + bin_edges[1:]) / 2
     
     # Interpolation with smoothing factor
-    spline = UnivariateSpline(x, hist, s=0.00001)
-    x_smooth = np.linspace(x.min(), x.max(), 500)
+    spline = UnivariateSpline(x, hist, s=0)
+    x_smooth = np.linspace(x.min(), x.max(), 100)
     y_smooth = spline(x_smooth)
     
     return x_smooth, y_smooth
+    
+
+def plot_fg_percentage_by_distance(player_name, window_size=5):
+    df_shots = fetch_shot_data(player_name)
+    
+    if df_shots.empty:
+        st.warning(f"No shot data found for {player_name}.")
+        return
+    
+    fg_percentage = calculate_fg_percentage_by_distance(df_shots, window_size=window_size)
+    
+    fig, ax = plt.subplots(figsize=(10, 6))
+    fg_percentage.plot(kind="line", ax=ax)
+    
+    ax.set_xlabel("Distance from Basket (meters)")
+    ax.set_ylabel("Field Goal Percentage (%)")
+    ax.set_title(f"Field Goal Percentage by Distance for {player_name}")
+    
+    st.pyplot(fig)
+
+from scipy.interpolate import UnivariateSpline
+
+def calculate_fg_percentage_by_distance(df_shots, bin_size=1, window_size=5):
+    df_shots["distance"] = df_shots.apply(lambda row: calculate_distance_from_basket(row["x_coord"], row["y_coord"]), axis=1)
+    df_shots["distance"] = df_shots["distance"].apply(convert_units_to_meters)
+
+    bins = np.arange(0, df_shots["distance"].max() + bin_size, bin_size)
+    df_shots["distance_bin"] = pd.cut(df_shots["distance"], bins, right=False)
+
+    fg_percentage = df_shots.groupby("distance_bin")["shot_result"].mean() * 100
+    fg_percentage.index = fg_percentage.index.categories.left  # Convert index to numeric
+
+    # Calculate moving average
+    fg_percentage = fg_percentage.rolling(window=window_size, min_periods=1, center=True).mean()
+    return fg_percentage
 
 def plot_interpolated_distribution(x_smooth, y_smooth):
     # Create figure
@@ -783,7 +819,8 @@ def main():
                 df_shots_with_distance["distance_from_basket_m"] = df_shots_with_distance["distance_from_basket_units"].apply(convert_units_to_meters)
                 x_smooth, y_smooth = calculate_interpolated_distribution(df_shots_with_distance)
                 plot_interpolated_distribution(x_smooth, y_smooth)
-
+            
+            plot_fg_percentage_by_distance(player_name)
 
             # Mean stats per game
             player_stats = fetch_player_stats(player_name)

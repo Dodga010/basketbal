@@ -415,9 +415,9 @@ def plot_fg_percentage_with_frequency(player_name, window_size=5):
 
     # Plot FG percentage with color gradient
     for i in range(len(player_fg_percentage) - 1):
-        ax.plot(player_fg_percentage.index[i:i+2], player_fg_percentage[i:i+2], color=colors[i], linewidth=2)
+        ax.plot(player_fg_percentage.index[i:i + 2], player_fg_percentage.values[i:i + 2], color=colors[i], linewidth=2)
 
-    ax.plot(league_fg_percentage.index, league_fg_percentage, linestyle='--', color='blue', label="League Mean FG%")
+    ax.plot(league_fg_percentage.index, league_fg_percentage.values, linestyle='--', color='blue', label="League Mean FG%")
     ax.set_xlabel("Distance from Basket (meters)")
     ax.set_ylabel("Field Goal Percentage (%)")
     ax.set_title(f"Field Goal Percentage by Distance for {player_name}")

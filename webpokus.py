@@ -408,27 +408,22 @@ def plot_fg_percentage_with_frequency(player_name, window_size=5):
     player_fg_percentage, player_shot_counts = calculate_fg_percentage_by_distance(df_player_shots, window_size=window_size)
     league_fg_percentage, league_shot_counts = calculate_fg_percentage_by_distance(df_league_shots, window_size=window_size)
 
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax1 = plt.subplots(figsize=(10, 6))
 
-    # Create a color gradient based on the frequency
-    colors = plt.cm.viridis(player_shot_counts / player_shot_counts.max())
+    # Plot FG percentage
+    ax1.plot(player_fg_percentage.index, player_fg_percentage.values, color='green', label=f'{player_name} FG%')
+    ax1.plot(league_fg_percentage.index, league_fg_percentage.values, linestyle='--', color='blue', label="League Mean FG%")
+    ax1.set_xlabel("Distance from Basket (meters)")
+    ax1.set_ylabel("Field Goal Percentage (%)")
+    ax1.set_title(f"Field Goal Percentage by Distance for {player_name}")
+    ax1.legend(loc='upper left')
 
-    # Plot FG percentage with color gradient
-    for i in range(len(player_fg_percentage) - 1):
-        ax.plot(player_fg_percentage.index[i:i + 2], player_fg_percentage.values[i:i + 2], color=colors[i], linewidth=2)
+    # Plot the frequency as bars
+    ax2 = ax1.twinx()
+    ax2.bar(player_fg_percentage.index, player_shot_counts, color='gray', alpha=0.3, width=0.5, label='Frequency of Shots')
+    ax2.set_ylabel("Frequency of Shots")
 
-    ax.plot(league_fg_percentage.index, league_fg_percentage.values, linestyle='--', color='blue', label="League Mean FG%")
-    ax.set_xlabel("Distance from Basket (meters)")
-    ax.set_ylabel("Field Goal Percentage (%)")
-    ax.set_title(f"Field Goal Percentage by Distance for {player_name}")
-    ax.legend()
-
-    # Add color bar for frequency
-    sm = plt.cm.ScalarMappable(cmap=plt.cm.viridis, norm=plt.Normalize(vmin=0, vmax=player_shot_counts.max()))
-    sm.set_array([])
-    cbar = plt.colorbar(sm, ax=ax)
-    cbar.set_label('Frequency of Shots')
-
+    fig.tight_layout()
     st.pyplot(fig)
 	    
 from scipy.interpolate import UnivariateSpline

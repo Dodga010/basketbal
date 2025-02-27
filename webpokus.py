@@ -55,29 +55,17 @@ def fetch_assists_vs_turnovers(game_type):
 
     conn = sqlite3.connect(db_path)
     
+    query = """
+    SELECT name AS Team, AVG(assists) AS Avg_Assists, AVG(turnovers) AS Avg_Turnovers
+    FROM Teams
+    """
+    
     if game_type == 'Home':
-        query = """
-        SELECT name AS Team, AVG(assists) AS Avg_Assists, AVG(turnovers) AS Avg_Turnovers
-        FROM Teams
-        WHERE tm = 1
-        GROUP BY name
-        ORDER BY Avg_Assists DESC;
-        """
+        query += "WHERE tm = 1 "
     elif game_type == 'Away':
-        query = """
-        SELECT name AS Team, AVG(assists) AS Avg_Assists, AVG(turnovers) AS Avg_Turnovers
-        FROM Teams
-        WHERE tm = 0
-        GROUP BY name
-        ORDER BY Avg_Assists DESC;
-        """
-    else:
-        query = """
-        SELECT name AS Team, AVG(assists) AS Avg_Assists, AVG(turnovers) AS Avg_Turnovers
-        FROM Teams
-        GROUP BY name
-        ORDER BY Avg_Assists DESC;
-        """
+        query += "WHERE tm = 0 "
+    
+    query += "GROUP BY name ORDER BY Avg_Assists DESC;"
 
     df = pd.read_sql(query, conn)
     conn.close()

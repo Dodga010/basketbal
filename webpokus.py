@@ -420,7 +420,6 @@ def plot_fg_percentage_by_distance(player_name, window_size=5):
     # Plot shot frequency on secondary y-axis
     ax2 = ax1.twinx()
     player_shot_counts.plot(kind="bar", ax=ax2, alpha=0.3, color='gray', label=f"{player_name} Shot Count")
-    league_shot_counts.plot(kind="bar", ax=ax2, alpha=0.3, color='red', label="League Shot Count")
     ax2.set_ylabel("Frequency of Shots", color='gray')
     ax2.tick_params(axis='y', labelcolor='gray')
     

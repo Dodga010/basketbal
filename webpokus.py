@@ -732,57 +732,55 @@ def main():
 
             col1, col2 = st.columns(2)
 
-        with col1:
-            # Dropdown menu for selecting stats
-            stat_options = [
-                'Avg_Points', 'Avg_Fouls', 'Avg_Free_Throws', 'Avg_Field_Goals', 
-                'Avg_Assists', 'Avg_Rebounds', 'Avg_Steals', 'Avg_Turnovers', 'Avg_Blocks'
-            ]
-            selected_stat = st.selectbox("Select the statistic to display", stat_options)
+            with col1:
+                # Dropdown menu for selecting stats
+                stat_options = [
+                    'Avg_Points', 'Avg_Fouls', 'Avg_Free_Throws', 'Avg_Field_Goals', 
+                    'Avg_Assists', 'Avg_Rebounds', 'Avg_Steals', 'Avg_Turnovers', 'Avg_Blocks'
+                ]
+                selected_stat = st.selectbox("Select the statistic to display", stat_options)
 
-        with col2:
-            # Radio buttons for selecting combined, home, or away
-            game_type = st.radio("Select game type", ('Combined', 'Home', 'Away'))
+            with col2:
+                # Radio buttons for selecting combined, home, or away
+                game_type = st.radio("Select game type", ('Combined', 'Home', 'Away'))
 
-        # Filter the DataFrame based on the selected game type
-        if game_type == 'Home':
-            filtered_df = df[df['Location'] == 'Home']
-        elif game_type == 'Away':
-            filtered_df = df[df['Location'] == 'Away']
-        else:
-            filtered_df = df
+            # Filter the DataFrame based on the selected game type
+            if game_type == 'Home':
+                filtered_df = df[df['Location'] == 'Home']
+            elif game_type == 'Away':
+                filtered_df = df[df['Location'] == 'Away']
+            else:
+                filtered_df = df
 
-        # Plot the selected statistic
-        if not filtered_df.empty:
-            st.subheader(f"{selected_stat} Statistics ({game_type} games)")
-            fig, ax = plt.subplots(figsize=(10, 6))
-            sns.barplot(x='Team', y=selected_stat, data=filtered_df, ax=ax, palette='viridis', ci=None)
+            # Plot the selected statistic
+            if not filtered_df.empty:
+                st.subheader(f"{selected_stat} Statistics ({game_type} games)")
+                fig, ax = plt.subplots(figsize=(10, 6))
+                sns.barplot(x='Team', y=selected_stat, data=filtered_df, ax=ax, palette='viridis', ci=None)
 
-            # Adding data labels
-            for p in ax.patches:
-                ax.annotate(format(p.get_height(), '.1f'),
-                            (p.get_x() + p.get_width() / 2., p.get_height()),
-                            ha='center', va='center',
-                            xytext=(0, 9),
-                            textcoords='offset points')
+                # Adding data labels
+                for p in ax.patches:
+                    ax.annotate(format(p.get_height(), '.1f'),
+                                (p.get_x() + p.get_width() / 2., p.get_height()),
+                                ha='center', va='center',
+                                xytext=(0, 9),
+                                textcoords='offset points')
 
-            ax.set_xlabel("Team")
-            ax.set_ylabel(selected_stat)
-            ax.set_title(f"{selected_stat} per Team ({game_type} games)")
-            ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha='right')
-            sns.despine(top=True)  # Remove the top spine
-            st.pyplot(fig)
-        else:
-            st.warning(f"No data available for {selected_stat} ({game_type} games)")
+                ax.set_xlabel("Team")
+                ax.set_ylabel(selected_stat)
+                ax.set_title(f"{selected_stat} per Team ({game_type} games)")
+                ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha='right')
+                sns.despine(top=True)  # Remove the top spine
+                st.pyplot(fig)
+            else:
+                st.warning(f"No data available for {selected_stat} ({game_type} games)")
 
-        # Add Assists vs Turnovers graph
-        assists_vs_turnovers_df = fetch_assists_vs_turnovers(game_type)
-        if not assists_vs_turnovers_df.empty:
-            plot_assists_vs_turnovers(assists_vs_turnovers_df, game_type)
-        else:
-            st.warning("No data available for Assists vs Turnovers")                                  
-
-
+            # Add Assists vs Turnovers graph
+            assists_vs_turnovers_df = fetch_assists_vs_turnovers(game_type)
+            if not assists_vs_turnovers_df.empty:
+                plot_assists_vs_turnovers(assists_vs_turnovers_df, game_type)
+            else:
+                st.warning("No data available for Assists vs Turnovers")                                  
 
     elif page == "Head-to-Head Comparison":
         df = fetch_team_data()
@@ -833,7 +831,7 @@ def main():
         else:
             player_name = st.selectbox("Select a Player", players)
             generate_shot_chart(player_name)
-         # Display shot data with distance
+            # Display shot data with distance
             display_shot_data_with_distance(player_name)
 
             # Calculate and plot interpolated distribution
@@ -842,21 +840,21 @@ def main():
                 df_shots_with_distance["distance_from_basket_units"] = df_shots_with_distance.apply(lambda row: calculate_distance_from_basket(row["x_coord"], row["y_coord"]), axis=1)
                 df_shots_with_distance["distance_from_basket_m"] = df_shots_with_distance["distance_from_basket_units"].apply(convert_units_to_meters)
                 x_smooth, y_smooth = calculate_interpolated_distribution(df_shots_with_distance)
-                plot_interpolated_distribution(x_smooth, y_smooth)
-        plot_fg_percentage_by_distance(player_name)
+                plot_interpolated_distribution(player_name)
+                plot_fg_percentage_by_distance(player_name)
 
             # Mean stats per game
             player_stats = fetch_player_stats(player_name)
             if not player_stats.empty:
                 st.subheader(f"📊 {player_name} - Average Stats per Game")
                 st.dataframe(player_stats.style.format({
-    				"PTS": "{:.1f}",
-    				"FG%": "{:.1%}",
-    				"3P%": "{:.1%}",
-    				"2P%": "{:.1%}",
-    				"FT%": "{:.1%}",
-    				"PPS": "{:.2f}"
-				}))
+                    "PTS": "{:.1f}",
+                    "FG%": "{:.1%}",
+                    "3P%": "{:.1%}",
+                    "2P%": "{:.1%}",
+                    "FT%": "{:.1%}",
+                    "PPS": "{:.2f}"
+                }))
             else:
                 st.warning(f"No statistics available for {player_name}.")
 

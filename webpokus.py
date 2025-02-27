@@ -159,6 +159,26 @@ def fetch_player_game_stats(player_name):
     df = pd.read_sql(query, conn, params=(first_initial, last_name))
     conn.close()
     return df
+
+def fetch_shot_data(player_name):
+    conn = sqlite3.connect(db_path)
+    query = """
+    SELECT x_coord, y_coord, shot_result
+    FROM Shots 
+    WHERE player_name = ?;
+    """
+    df_shots = pd.read_sql_query(query, conn, params=(player_name,))
+    conn.close()
+    return df_shots
+def fetch_league_shot_data():
+    conn = sqlite3.connect(db_path)
+    query = """
+    SELECT x_coord, y_coord, shot_result
+    FROM Shots;
+    """
+    df_league_shots = pd.read_sql_query(query, conn)
+    conn.close()
+    return df_league_shots
     
 def fetch_player_and_league_stats_per_40(player_name):
     """Calculate player's stats per 40 minutes and compare against league averages per 40 minutes."""
@@ -266,6 +286,39 @@ def fetch_player_and_league_stats_per_40(player_name):
 
     return df_result
 
+def plot_shot_coordinates(player_name):
+    conn = sqlite3.connect(db_path)
+    query = """
+    SELECT x_coord, y_coord
+    FROM Shots 
+    WHERE player_name = ?;
+    """
+    df_shots = pd.read_sql_query(query, conn, params=(player_name,))
+    conn.close()
+
+    if df_shots.empty:
+        st.warning(f"No shot data found for {player_name}.")
+        return
+
+    # Invert x-coordinates for shots on the right side to the left side
+    df_shots['x_coord'] = df_shots['x_coord'].apply(lambda x: 100 - x if x > 50 else x)
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(8, 6))
+
+    # Plot individual shots
+    ax.scatter(df_shots["x_coord"], df_shots["y_coord"], c="blue", s=35, alpha=0.6)
+
+    # Remove all axis elements (clean chart)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_xticklabels([])
+    ax.set_yticklabels([])
+    ax.axis("off")  # Hide axis
+
+    # Display chart in Streamlit
+    st.pyplot(fig)
+
 def plot_assists_vs_turnovers(data, game_type):
     st.subheader(f"📊 Assists vs Turnovers ({game_type} games)")
     fig, ax = plt.subplots(figsize=(10, 6))
@@ -282,6 +335,41 @@ def plot_assists_vs_turnovers(data, game_type):
     ax.set_xlabel("Average Turnovers per Game")
     ax.set_ylabel("Average Assists per Game")
     ax.set_title(f"Assists vs Turnovers ({game_type} games)")
+    st.pyplot(fig)
+
+# Function to calculate distance from the basket
+def calculate_distance_from_basket(x, y, basket_x=50, basket_y=0):
+    return np.sqrt((x - basket_x) ** 2 + (y - basket_y) ** 2)
+
+def fetch_first_5_shots(player_name):
+    conn = sqlite3.connect(db_path)
+    query = """
+    SELECT x_coord, y_coord, shot_result
+    FROM Shots 
+    WHERE player_name = ?
+    """
+    df_shots = pd.read_sql_query(query, conn, params=(player_name,))
+    conn.close()
+    return df_shots
+
+def plot_first_5_shots(df_shots):
+    fig, ax = plt.subplots(figsize=(6, 6))
+    ax.set_xlim(0, 100)
+    ax.set_ylim(0, 100)
+    ax.set_aspect('equal')
+
+    # Plot shots as dots
+    ax.scatter(df_shots['x_coord'], df_shots['y_coord'], c='blue', s=100)
+
+    # Annotate shots with their coordinates
+    for i, row in df_shots.iterrows():
+        ax.annotate(f"({row['x_coord']}, {row['y_coord']})", (row['x_coord'], row['y_coord']))
+
+    ax.set_title("First 5 Shots and Coordinates")
+    ax.set_xlabel("X Coordinate")
+    ax.set_ylabel("Y Coordinate")
+
+    plt.grid(True)
     st.pyplot(fig)
 
 
@@ -591,6 +679,9 @@ def main():
         else:
             player_name = st.selectbox("Select a Player", players)
             generate_shot_chart(player_name)
+            df_shots = fetch_first_5_shots(player_name)
+            st.dataframe(df_shots)
+            plot_shot_coordinates(player_name)
 
             # Mean stats per game
             player_stats = fetch_player_stats(player_name)

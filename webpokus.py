@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
 import seaborn as sns
 import numpy as np
+from scipy.interpolate import UnivariateSpline
 
 # ✅ Define SQLite database path (works locally & online)
 db_path = os.path.join(os.path.dirname(__file__), "database.db")
@@ -338,8 +339,86 @@ def plot_assists_vs_turnovers(data, game_type):
     st.pyplot(fig)
 
 # Function to calculate distance from the basket
-def calculate_distance_from_basket(x, y, basket_x=50, basket_y=0):
+def calculate_distance_from_basket(x, y, basket_x=6.2, basket_y=50):
+    # Invert x-coordinates for shots on the right side
+    x = 100 - x if x > 50 else x
     return np.sqrt((x - basket_x) ** 2 + (y - basket_y) ** 2)
+
+def convert_units_to_meters(distance_units):
+    # 35 units is 6.75 meters
+    return distance_units * (6.75 / 35)
+
+def display_shot_data_with_distance(player_name):
+    # Fetch shot data
+    df_shots = fetch_shot_data(player_name)
+    
+    if df_shots.empty:
+        st.warning(f"No shot data found for {player_name}.")
+        return
+def calculate_moving_average(df_shots, window_size=5):
+    distances = df_shots["distance_from_basket_m"]
+    # Calculate the histogram
+    hist, bin_edges = np.histogram(distances, bins=np.arange(0, distances.max() + 1, 0.5), density=True)
+    # Calculate the moving average
+    moving_avg = np.convolve(hist, np.ones(window_size)/window_size, mode='valid')
+    x_grid = bin_edges[:len(moving_avg)]
+    return x_grid, moving_avg
+    
+def calculate_moving_average(df_shots, window_size=5):
+    distances = df_shots["distance_from_basket_m"]
+    # Calculate the histogram
+    hist, bin_edges = np.histogram(distances, bins=np.arange(0, distances.max() + 1, 0.5), density=True)
+    # Calculate the moving average
+    moving_avg = np.convolve(hist, np.ones(window_size)/window_size, mode='valid')
+    x_grid = bin_edges[:len(moving_avg)]
+    return x_grid, moving_avg
+
+    # Calculate distances in units
+    df_shots["distance_from_basket_units"] = df_shots.apply(lambda row: calculate_distance_from_basket(row["x_coord"], row["y_coord"]), axis=1)
+
+    # Convert distances to meters
+    df_shots["distance_from_basket_m"] = df_shots["distance_from_basket_units"].apply(convert_units_to_meters)
+
+    # Display the DataFrame
+    st.dataframe(df_shots)
+
+def calculate_interpolated_distribution(df_shots):
+    distances = df_shots["distance_from_basket_m"]
+    hist, bin_edges = np.histogram(distances, bins=np.arange(0, distances.max() + 1, 1), density=True)
+    
+    # Midpoints of bins
+    x = (bin_edges[:-1] + bin_edges[1:]) / 2
+    
+    # Interpolation with smoothing factor
+    spline = UnivariateSpline(x, hist, s=0.00001)
+    x_smooth = np.linspace(x.min(), x.max(), 500)
+    y_smooth = spline(x_smooth)
+    
+    return x_smooth, y_smooth
+
+def plot_interpolated_distribution(x_smooth, y_smooth):
+    # Create figure
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    # Plot line graph
+    ax.plot(x_smooth, y_smooth, label='Shot Distribution')
+
+    # Set labels and title
+    ax.set_xlabel("Distance from Basket (meters)")
+    ax.set_ylabel("Density")
+    ax.set_title("Percentage Distribution of Shots Based on Distance (Interpolated)")
+
+    # Display plot
+    st.pyplot(fig)
+
+def calculate_shot_distribution(df_shots):
+    # Create bins for distance
+    bins = np.arange(0, df_shots["distance_from_basket_m"].max() + 1, 1)
+    df_shots["distance_bin"] = pd.cut(df_shots["distance_from_basket_m"], bins, right=False)
+
+    # Calculate distribution
+    distribution = df_shots["distance_bin"].value_counts(normalize=True).sort_index() * 100
+    return distribution
 
 def fetch_first_5_shots(player_name):
     conn = sqlite3.connect(db_path)
@@ -351,6 +430,21 @@ def fetch_first_5_shots(player_name):
     df_shots = pd.read_sql_query(query, conn, params=(player_name,))
     conn.close()
     return df_shots
+
+def plot_shot_distribution(distribution):
+    # Create figure
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    # Plot line graph
+    distribution.plot(kind='line', ax=ax)
+
+    # Set labels and title
+    ax.set_xlabel("Distance from Basket (meters)")
+    ax.set_ylabel("Percentage of Shots (%)")
+    ax.set_title("Percentage Distribution of Shots Based on Distance")
+
+    # Display plot
+    st.pyplot(fig)
 
 def plot_first_5_shots(df_shots):
     fig, ax = plt.subplots(figsize=(6, 6))
@@ -679,9 +773,17 @@ def main():
         else:
             player_name = st.selectbox("Select a Player", players)
             generate_shot_chart(player_name)
-            df_shots = fetch_first_5_shots(player_name)
-            st.dataframe(df_shots)
-            plot_shot_coordinates(player_name)
+         # Display shot data with distance
+            display_shot_data_with_distance(player_name)
+
+            # Calculate and plot interpolated distribution
+            df_shots_with_distance = fetch_shot_data(player_name)
+            if not df_shots_with_distance.empty:
+                df_shots_with_distance["distance_from_basket_units"] = df_shots_with_distance.apply(lambda row: calculate_distance_from_basket(row["x_coord"], row["y_coord"]), axis=1)
+                df_shots_with_distance["distance_from_basket_m"] = df_shots_with_distance["distance_from_basket_units"].apply(convert_units_to_meters)
+                x_smooth, y_smooth = calculate_interpolated_distribution(df_shots_with_distance)
+                plot_interpolated_distribution(x_smooth, y_smooth)
+
 
             # Mean stats per game
             player_stats = fetch_player_stats(player_name)

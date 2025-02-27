@@ -457,16 +457,15 @@ def plot_interpolated_distribution(player_name):
     
     x_smooth, y_smooth = calculate_interpolated_distribution(df_shots)
     
-    col1, col2 = st.columns(2)
-    
-    with col2:
-        st.subheader(f"Percentage Distribution of Shots for {player_name}")
-        fig, ax = plt.subplots(figsize=(10, 6))
-        ax.plot(x_smooth, y_smooth, label='Shot Distribution')
-        ax.set_xlabel("Distance from Basket (meters)")
-        ax.set_ylabel("Density")
-        ax.set_title("Percentage Distribution of Shots Based on Distance (Interpolated)")
-        st.pyplot(fig)
+    # Remove columns and plot graphs one below the other
+    st.subheader(f"Percentage Distribution of Shots for {player_name}")
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.plot(x_smooth, y_smooth, label='Shot Distribution')
+    ax.set_xlabel("Distance from Basket (meters)")
+    ax.set_ylabel("Density")
+    ax.set_title("Percentage Distribution of Shots Based on Distance (Interpolated)")
+    st.pyplot(fig)
+
 
 def calculate_shot_distribution(df_shots):
     # Create bins for distance
@@ -837,6 +836,7 @@ def main():
                 df_shots_with_distance["distance_from_basket_units"] = df_shots_with_distance.apply(lambda row: calculate_distance_from_basket(row["x_coord"], row["y_coord"]), axis=1)
                 df_shots_with_distance["distance_from_basket_m"] = df_shots_with_distance["distance_from_basket_units"].apply(convert_units_to_meters)
                 x_smooth, y_smooth = calculate_interpolated_distribution(df_shots_with_distance)
+                # Call the plot_interpolated_distribution function without columns
                 plot_interpolated_distribution(player_name)
 
             # Plot FG percentage with frequency

@@ -397,39 +397,46 @@ def calculate_interpolated_distribution(df_shots):
     
     return x_smooth, y_smooth
     
-
 def plot_fg_percentage_by_distance(player_name, window_size=5):
-    df_shots = fetch_shot_data(player_name)
+    df_player_shots = fetch_shot_data(player_name)
+    df_league_shots = fetch_league_shot_data()
     
-    if df_shots.empty:
+    if df_player_shots.empty:
         st.warning(f"No shot data found for {player_name}.")
         return
     
-    fg_percentage = calculate_fg_percentage_by_distance(df_shots, window_size=window_size)
+    player_fg_percentage = calculate_fg_percentage_by_distance(df_player_shots, window_size=window_size)
+    league_fg_percentage = calculate_fg_percentage_by_distance(df_league_shots, window_size=window_size)
     
     fig, ax = plt.subplots(figsize=(10, 6))
-    fg_percentage.plot(kind="line", ax=ax)
+    player_fg_percentage.plot(kind="line", ax=ax, label=f"{player_name} FG%")
+    league_fg_percentage.plot(kind="line", ax=ax, label="League Mean FG%", linestyle='--')
     
     ax.set_xlabel("Distance from Basket (meters)")
     ax.set_ylabel("Field Goal Percentage (%)")
     ax.set_title(f"Field Goal Percentage by Distance for {player_name}")
+    ax.legend()
     
     st.pyplot(fig)
 
 from scipy.interpolate import UnivariateSpline
 
 def calculate_fg_percentage_by_distance(df_shots, bin_size=1, window_size=5):
+    # Calculate distance for each shot
     df_shots["distance"] = df_shots.apply(lambda row: calculate_distance_from_basket(row["x_coord"], row["y_coord"]), axis=1)
     df_shots["distance"] = df_shots["distance"].apply(convert_units_to_meters)
-
+    
+    # Create bins for distance
     bins = np.arange(0, df_shots["distance"].max() + bin_size, bin_size)
     df_shots["distance_bin"] = pd.cut(df_shots["distance"], bins, right=False)
-
+    
+    # Calculate field goal percentage for each bin
     fg_percentage = df_shots.groupby("distance_bin")["shot_result"].mean() * 100
     fg_percentage.index = fg_percentage.index.categories.left  # Convert index to numeric
-
-    # Calculate moving average
+    
+    # Apply moving average for smoothing
     fg_percentage = fg_percentage.rolling(window=window_size, min_periods=1, center=True).mean()
+    
     return fg_percentage
 
 def plot_interpolated_distribution(x_smooth, y_smooth):

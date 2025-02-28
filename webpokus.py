@@ -45,7 +45,7 @@ def fetch_team_data():
         ROUND(AVG(field_goals_made * 100.0 / field_goals_attempted), 2) AS eFG_percentage,
         ROUND(AVG(turnovers * 100.0 / (field_goals_attempted + 0.44 * free_throws_attempted)), 2) AS TOV_percentage,
         ROUND(AVG(rebounds_offensive * 100.0 / (rebounds_offensive + rebounds_defensive)), 2) AS ORB_percentage,
-        ROUND(AVG(free_throws_made * 100.0 / field_goals_attempted), 2) AS FTR_percentage
+        ROUND(AVG(free_throws_attempted * 100.0 / field_goals_attempted), 2) AS FTR_percentage
     FROM Teams
     GROUP BY name, tm
     ORDER BY Avg_Points DESC;
@@ -66,10 +66,10 @@ def fetch_team_matches(team_name):
         (t1.p1_score + t1.p2_score + t1.p3_score + t1.p4_score) AS Team_Score,
         (t2.p1_score + t2.p2_score + t2.p3_score + t2.p4_score) AS Opponent_Score,
         t2.name AS Opponent,
-        ROUND((t1.p1_score + t1.p2_score + t1.p3_score + t1.p4_score) * 100.0 / t1.field_goals_attempted, 2) AS eFG_percentage,
+        ROUND((t1.field_goals_made + 0.5 * t1.three_pointers_made) * 100.0 / t1.field_goals_attempted, 2) AS eFG_percentage,
         ROUND(t1.turnovers * 100.0 / (t1.field_goals_attempted + 0.44 * t1.free_throws_attempted), 2) AS TOV_percentage,
         ROUND(t1.rebounds_offensive * 100.0 / (t1.rebounds_offensive + t1.rebounds_defensive), 2) AS ORB_percentage,
-        ROUND(t1.free_throws_made * 100.0 / t1.field_goals_attempted, 2) AS FTR_percentage
+        ROUND(t1.free_throws_attempted * 100.0 / t1.field_goals_attempted, 2) AS FTR_percentage
     FROM Teams t1
     JOIN Teams t2 ON t1.game_id = t2.game_id AND t1.name != t2.name
     WHERE t1.name = '{team_name}'
@@ -569,7 +569,7 @@ def fetch_team_four_factors(team_name):
         ROUND((field_goals_made + 0.5 * three_pointers_made) * 100.0 / field_goals_attempted, 2) AS eFG_percentage,
         ROUND(turnovers * 100.0 / (field_goals_attempted + 0.44 * free_throws_attempted), 2) AS TOV_percentage,
         ROUND(rebounds_offensive * 100.0 / (rebounds_offensive + rebounds_defensive), 2) AS ORB_percentage,
-        ROUND(free_throws_made * 100.0 / field_goals_attempted, 2) AS FTR_percentage
+        ROUND(free_throws_attempted * 100.0 / field_goals_attempted, 2) AS FTR_percentage
     FROM Teams
     WHERE name = '{team_name}'
     ORDER BY game_id;

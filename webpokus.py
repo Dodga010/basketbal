@@ -533,7 +533,44 @@ def plot_first_5_shots(df_shots):
     plt.grid(True)
     st.pyplot(fig)
 
+def fetch_team_four_factors(team_name):
+    if not table_exists("Teams"):
+        return pd.DataFrame()
 
+    conn = sqlite3.connect(db_path)
+    query = f"""
+    SELECT 
+        game_id,
+        ROUND((p1_score + p2_score + p3_score + p4_score) * 100.0 / field_goals_attempted, 2) AS eFG_percentage,
+        ROUND(turnovers * 100.0 / (field_goals_attempted + 0.44 * free_throws_attempted), 2) AS TOV_percentage,
+        ROUND(rebounds_offensive * 100.0 / (rebounds_offensive + rebounds_defensive), 2) AS ORB_percentage,
+        ROUND(free_throws_made * 100.0 / field_goals_attempted, 2) AS FTR_percentage
+    FROM Teams
+    WHERE name = '{team_name}'
+    ORDER BY game_id;
+    """
+    df = pd.read_sql(query, conn)
+    conn.close()
+    return df
+
+def plot_four_factors_stats(team1, team2, selected_stats):
+    df_team1 = fetch_team_four_factors(team1)
+    df_team2 = fetch_team_four_factors(team2)
+
+    if df_team1.empty or df_team2.empty:
+        st.error("One or both teams have no recorded stats.")
+        return
+
+    fig, ax = plt.subplots(figsize=(12, 8))
+    for stat in selected_stats:
+        ax.plot(df_team1['game_id'], df_team1[stat], label=f"{team1} - {stat}")
+        ax.plot(df_team2['game_id'], df_team2[stat], label=f"{team2} - {stat}", linestyle='--')
+
+    ax.set_xlabel("Game ID")
+    ax.set_ylabel("Value")
+    ax.set_title(f"{team1} vs {team2} - Four Factors Statistics")
+    ax.legend()
+    st.pyplot(fig)
 
 
 def fetch_player_expected_stats(player_name):
@@ -738,7 +775,17 @@ def main():
                 'ORB_percentage': "{:.2f}",
                 'FTR_percentage': "{:.2f}"
             }))
-    if page == "Team Season Boxscore":
+            team_options = df["Team"].unique()
+        team1 = st.selectbox("Select Team 1", team_options, key="team1_selectbox")
+        team2 = st.selectbox("Select Team 2", team_options, key="team2_selectbox")
+
+        four_factors = ['eFG_percentage', 'TOV_percentage', 'ORB_percentage', 'FTR_percentage']
+        selected_stats = st.multiselect("Select statistics to display", four_factors, default=four_factors, key="stats_multiselect")
+
+        if team1 and team2 and selected_stats:
+            plot_four_factors_stats(team1, team2, selected_stats)
+
+    elif page == "Team Season Boxscore":
         df = fetch_team_data()
         if df.empty:
             st.warning("No team data available.")
@@ -934,9 +981,6 @@ def main():
                 }))
             else:
                 st.warning(f"No per-40 stats available for {player_name}.")
-
-if __name__ == "__main__":
-    main()
 
 if __name__ == "__main__":
     main()

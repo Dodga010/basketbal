@@ -22,7 +22,6 @@ def table_exists(table_name):
     conn.close()
     return exists
 
-# Fetch team data (averages per game)
 def fetch_team_data():
     if not table_exists("Teams"):
         st.error("⚠️ Error: 'Teams' table not found in the database.")
@@ -42,7 +41,11 @@ def fetch_team_data():
         ROUND(AVG(rebounds_total), 1) AS Avg_Rebounds,
         ROUND(AVG(steals), 1) AS Avg_Steals,
         ROUND(AVG(turnovers), 1) AS Avg_Turnovers,
-        ROUND(AVG(blocks), 1) AS Avg_Blocks
+        ROUND(AVG(blocks), 1) AS Avg_Blocks,
+        ROUND(AVG(field_goals_made * 100.0 / field_goals_attempted), 2) AS eFG_percentage,
+        ROUND(AVG(turnovers * 100.0 / (field_goals_attempted + 0.44 * free_throws_attempted)), 2) AS TOV_percentage,
+        ROUND(AVG(rebounds_offensive * 100.0 / (rebounds_offensive + rebounds_defensive)), 2) AS ORB_percentage,
+        ROUND(AVG(free_throws_made * 100.0 / field_goals_attempted), 2) AS FTR_percentage
     FROM Teams
     GROUP BY name, tm
     ORDER BY Avg_Points DESC;
@@ -531,6 +534,8 @@ def plot_first_5_shots(df_shots):
     st.pyplot(fig)
 
 
+
+
 def fetch_player_expected_stats(player_name):
     conn = sqlite3.connect(db_path)
 
@@ -641,6 +646,16 @@ def fetch_player_stats(player_name):
     conn.close()
     return df
 
+def plot_team_stats_correlation(df):
+    # Calculate the correlation matrix
+    corr_matrix = df.corr()
+
+    # Plot heatmap
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(corr_matrix, annot=True, cmap='coolwarm', linewidths=0.5)
+    plt.title("Correlation Heatmap of Team Statistics")
+    st.pyplot(plt)
+
 # ✅ Generate Shot Chart
 def generate_shot_chart(player_name):
     """Generate a shot chart with heatmap restricted within the court boundaries."""
@@ -705,10 +720,24 @@ def generate_shot_chart(player_name):
     # ✅ Display chart in Streamlit
     st.pyplot(fig)
 
+    
 def main():
     st.title("🏀 Basketball Stats Viewer")
-    page = st.sidebar.selectbox("📌 Choose a page", ["Team Season Boxscore", "Head-to-Head Comparison", "Referee Stats", "Shot Chart"])
+    page = st.sidebar.selectbox("📌 Choose a page", ["Team Season Boxscore", "Head-to-Head Comparison", "Referee Stats", "Shot Chart", "Four Factors"])
 
+    if page == "Four Factors":
+        df = fetch_team_data()
+        if df.empty:
+            st.warning("No team data available.")
+        else:
+            st.subheader("📊 Four Factors Statistics (Averages Per Game)")
+            four_factors = ['eFG_percentage', 'TOV_percentage', 'ORB_percentage', 'FTR_percentage']
+            st.dataframe(df[['Team', 'Location'] + four_factors].style.format({
+                'eFG_percentage': "{:.2f}",
+                'TOV_percentage': "{:.2f}",
+                'ORB_percentage': "{:.2f}",
+                'FTR_percentage': "{:.2f}"
+            }))
     if page == "Team Season Boxscore":
         df = fetch_team_data()
         if df.empty:
@@ -740,7 +769,8 @@ def main():
                 # Dropdown menu for selecting stats
                 stat_options = [
                     'Avg_Points', 'Avg_Fouls', 'Avg_Free_Throws', 'Avg_Field_Goals',
-                    'Avg_Assists', 'Avg_Rebounds', 'Avg_Steals', 'Avg_Turnovers', 'Avg_Blocks'
+                    'Avg_Assists', 'Avg_Rebounds', 'Avg_Steals', 'Avg_Turnovers', 'Avg_Blocks',
+                    'eFG', 'TOV', 'ORB', 'FTR'
                 ]
                 selected_stat = st.selectbox("Select the statistic to display", stat_options)
 
@@ -904,6 +934,9 @@ def main():
                 }))
             else:
                 st.warning(f"No per-40 stats available for {player_name}.")
+
+if __name__ == "__main__":
+    main()
 
 if __name__ == "__main__":
     main()

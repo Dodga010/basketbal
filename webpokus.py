@@ -128,19 +128,19 @@ def fetch_player_game_stats(player_name):
         P.points AS 'PTS',
         P.field_goals_made AS 'FGM',
         P.field_goals_attempted AS 'FGA',
-        CASE WHEN P.field_goals_attempted > 0 THEN CAST(P.field_goals_made AS FLOAT) / P.field_goals_attempted ELSE 0 END AS 'FG%',
+        CASE WHEN P.field_goals_attempted > 0 THEN CAST(P.field_goals_made AS FLOAT) * 100 / P.field_goals_attempted ELSE 0 END AS 'FG%',
 
         P.three_pointers_made AS '3PM',
         P.three_pointers_attempted AS '3PA',
-        CASE WHEN P.three_pointers_attempted > 0 THEN CAST(P.three_pointers_made AS FLOAT) / P.three_pointers_attempted ELSE 0 END AS '3P%',
+        CASE WHEN P.three_pointers_attempted > 0 THEN CAST(P.three_pointers_made AS FLOAT) * 100 / P.three_pointers_attempted ELSE 0 END AS '3P%',
 
         P.two_pointers_made AS '2PM',
         P.two_pointers_attempted AS '2PA',
-        CASE WHEN P.two_pointers_attempted > 0 THEN CAST(P.two_pointers_made AS FLOAT) / P.two_pointers_attempted ELSE 0 END AS '2P%',
+        CASE WHEN P.two_pointers_attempted > 0 THEN CAST(P.two_pointers_made AS FLOAT) * 100 / P.two_pointers_attempted ELSE 0 END AS '2P%',
 
         P.free_throws_made AS 'FTM',
         P.free_throws_attempted AS 'FTA',
-        CASE WHEN P.free_throws_attempted > 0 THEN CAST(P.free_throws_made AS FLOAT) / P.free_throws_attempted ELSE 0 END AS 'FT%',
+        CASE WHEN P.free_throws_attempted > 0 THEN CAST(P.free_throws_made AS FLOAT) * 100 / P.free_throws_attempted ELSE 0 END AS 'FT%',
 
         P.rebounds_total AS 'REB',
         P.assists AS 'AST',
@@ -874,17 +874,17 @@ def main():
                 mean_values['MIN'] = '-'
                 player_game_stats_with_mean = pd.concat([player_game_stats, mean_values.to_frame().T], ignore_index=True)
                 st.dataframe(player_game_stats_with_mean.style.format({
-                    "FG%": "{:.3f}%",
-                    "3P%": "{:.3f}%",
-                    "2P%": "{:.3f}%",
-                    "FT%": "{:.3f}%",
-                    "PPS": "{:.3f}",
-                    "PTS": "{:.3f}",
-                    "REB": "{:.3f}",
-                    "AST": "{:.3f}",
-                    "STL": "{:.3f}",
-                    "BLK": "{:.3f}",
-                    "TO": "{:.3f}"
+                    "FG%": "{:.1f}%",
+                    "3P%": "{:.1f}%",
+                    "2P%": "{:.1f}%",
+                    "FT%": "{:.1f}%",
+                    "PPS": "{:.1f}",
+                    "PTS": "{:.1f}",
+                    "REB": "{:.1f}",
+                    "AST": "{:.1f}",
+                    "STL": "{:.1f}",
+                    "BLK": "{:.1f}",
+                    "TO": "{:.1f}"
                 }))
             else:
                 st.warning(f"No game-by-game stats available for {player_name}.")
@@ -893,14 +893,14 @@ def main():
             if not player_vs_league_40.empty:
                 st.subheader(f"📊 {player_name} vs. League - Stats per 40 Minutes")
                 st.dataframe(player_vs_league_40.style.format({
-                    "PTS": "{:.3f}",
-                    "REB": "{:.3f}",
-                    "AST": "{:.3f}",
-                    "STL": "{:.3f}",
-                    "BLK": "{:.3f}",
-                    "TO": "{:.3f}",
-                    "FGA": "{:.3f}",
-                    "PPS": "{:.3f}"
+                    "PTS": "{:.1f}",
+                    "REB": "{:.1f}",
+                    "AST": "{:.1f}",
+                    "STL": "{:.1f}",
+                    "BLK": "{:.1f}",
+                    "TO": "{:.1f}",
+                    "FGA": "{:.1f}",
+                    "PPS": "{:.2f}"
                 }))
             else:
                 st.warning(f"No per-40 stats available for {player_name}.")

@@ -54,6 +54,31 @@ def fetch_team_data():
     conn.close()
     return df
 
+def fetch_team_matches(team_name):
+    if not table_exists("Teams"):
+        return pd.DataFrame()
+
+    conn = sqlite3.connect(db_path)
+    query = f"""
+    SELECT 
+        t1.game_id,
+        t1.name AS Team,
+        (t1.p1_score + t1.p2_score + t1.p3_score + t1.p4_score) AS Team_Score,
+        (t2.p1_score + t2.p2_score + t2.p3_score + t2.p4_score) AS Opponent_Score,
+        t2.name AS Opponent,
+        ROUND((t1.p1_score + t1.p2_score + t1.p3_score + t1.p4_score) * 100.0 / t1.field_goals_attempted, 2) AS eFG_percentage,
+        ROUND(t1.turnovers * 100.0 / (t1.field_goals_attempted + 0.44 * t1.free_throws_attempted), 2) AS TOV_percentage,
+        ROUND(t1.rebounds_offensive * 100.0 / (t1.rebounds_offensive + t1.rebounds_defensive), 2) AS ORB_percentage,
+        ROUND(t1.free_throws_made * 100.0 / t1.field_goals_attempted, 2) AS FTR_percentage
+    FROM Teams t1
+    JOIN Teams t2 ON t1.game_id = t2.game_id AND t1.name != t2.name
+    WHERE t1.name = '{team_name}'
+    ORDER BY t1.game_id;
+    """
+    df = pd.read_sql(query, conn)
+    conn.close()
+    return df
+
 def fetch_assists_vs_turnovers(game_type):
     if not table_exists("Teams"):
         return pd.DataFrame()
@@ -541,7 +566,7 @@ def fetch_team_four_factors(team_name):
     query = f"""
     SELECT 
         game_id,
-        ROUND((p1_score + p2_score + p3_score + p4_score) * 100.0 / field_goals_attempted, 2) AS eFG_percentage,
+        ROUND((field_goals_made + 0.5 * three_pointers_made) * 100.0 / field_goals_attempted, 2) AS eFG_percentage,
         ROUND(turnovers * 100.0 / (field_goals_attempted + 0.44 * free_throws_attempted), 2) AS TOV_percentage,
         ROUND(rebounds_offensive * 100.0 / (rebounds_offensive + rebounds_defensive), 2) AS ORB_percentage,
         ROUND(free_throws_made * 100.0 / field_goals_attempted, 2) AS FTR_percentage
@@ -561,6 +586,11 @@ def plot_four_factors_stats(team1, team2, selected_stats):
         st.error("One or both teams have no recorded stats.")
         return
 
+    # Apply smoothing using rolling mean
+    window_size = 5  # Adjust the window size for more or less smoothing
+    df_team1 = df_team1.set_index('game_id').rolling(window=window_size).mean().reset_index()
+    df_team2 = df_team2.set_index('game_id').rolling(window=window_size).mean().reset_index()
+
     fig, ax = plt.subplots(figsize=(12, 8))
     for stat in selected_stats:
         ax.plot(df_team1['game_id'], df_team1[stat], label=f"{team1} - {stat}")
@@ -571,7 +601,6 @@ def plot_four_factors_stats(team1, team2, selected_stats):
     ax.set_title(f"{team1} vs {team2} - Four Factors Statistics")
     ax.legend()
     st.pyplot(fig)
-
 
 def fetch_player_expected_stats(player_name):
     conn = sqlite3.connect(db_path)
@@ -784,6 +813,14 @@ def main():
 
         if team1 and team2 and selected_stats:
             plot_four_factors_stats(team1, team2, selected_stats)
+
+        if team1:
+            st.subheader(f"📝 Detailed Matches for {team1}")
+            df_matches = fetch_team_matches(team1)
+            if not df_matches.empty:
+                st.dataframe(df_matches)
+            else:
+                st.warning(f"No match data available for {team1}.")
 
     elif page == "Team Season Boxscore":
         df = fetch_team_data()

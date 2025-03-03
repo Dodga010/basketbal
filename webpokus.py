@@ -375,21 +375,21 @@ def display_pbp_actions(actions):
         st.dataframe(actions)
 
 def plot_score_lead_full_game(game_id):
-    """Plot the score lead progression for the entire game on one timeline."""
-    pbp_data = fetch_pbp_data(game_id)
+    """Plot the score lead progression for the entire game with correct quarter countdowns."""
+    pbp_data = fetch_pbp_actions(game_id)  # Fetch all quarters' data
 
     if pbp_data.empty:
         st.warning(f"No play-by-play data found for Game ID {game_id}.")
         return
 
-    # Convert game_time to total seconds (accounting for quarters)
+    # Convert game_time to total seconds, ensuring each quarter starts at 10:00 and counts down
     pbp_data["Seconds"] = pbp_data.apply(
-        lambda row: (row["period"] - 1) * 600 + int(row["game_time"].split(":")[0]) * 60 + int(row["game_time"].split(":")[1]),
+        lambda row: (row["period"] - 1) * 600 + (10 - int(row["game_time"].split(":")[0])) * 60 - int(row["game_time"].split(":")[1]),
         axis=1
     )
 
-    # Sort data so that time progresses correctly from start to end
-    pbp_data = pbp_data.sort_values(by="Seconds")
+    # Sort data so that time progresses correctly across all quarters
+    pbp_data = pbp_data.sort_values(by=["Seconds"], ascending=True)
 
     # Smooth the lead line using a rolling average
     pbp_data["Smoothed Lead"] = pbp_data["lead"].rolling(window=3, min_periods=1).mean()
@@ -404,22 +404,26 @@ def plot_score_lead_full_game(game_id):
     ax.set_ylabel("Lead (Team 1 - Team 2)", fontsize=12)
     ax.set_title(f"Score Lead Progression - Full Game", fontsize=14)
 
-    # Set x-ticks at proper intervals (e.g., every 5 minutes)
-    max_seconds = pbp_data["Seconds"].max()
+    # Set x-ticks at proper intervals (every 5 minutes)
+    max_seconds = 2400  # 4 quarters * 10 minutes * 60 seconds
     tick_positions = np.arange(0, max_seconds + 1, 300)  # Every 5 minutes
-    tick_labels = [f"{t // 60}:{t % 60:02d}" for t in tick_positions]  # Format as MM:SS
+    tick_labels = [f"{(2400 - t) // 60}:{(2400 - t) % 60:02d}" for t in tick_positions]  # Format as MM:SS
     ax.set_xticks(tick_positions)
     ax.set_xticklabels(tick_labels, rotation=45)
 
     # Show quarter separators
-    for q in range(1, 5):  # Assuming a 4-quarter game
-        ax.axvline(x=q * 600, color='red', linestyle='dashed', alpha=0.5, label=f"End of Q{q}" if q < 4 else "")
+    for q in range(1, 4):  # Add dashed lines for Q1, Q2, Q3 (Q4 ends at 0:00)
+        ax.axvline(x=q * 600, color='red', linestyle='dashed', alpha=0.5, label=f"End of Q{q}")
+
+    # Invert x-axis so it properly counts down from 10:00 to 0:00 for each quarter
+    ax.invert_xaxis()
 
     # Show grid and legend
     ax.legend()
     ax.grid(True, linestyle="--", alpha=0.6)
 
     st.pyplot(fig)
+
 
 def fetch_pbp_data(game_id):
     if not table_exists("PlayByPlay"):

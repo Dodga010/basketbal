@@ -315,6 +315,133 @@ def fetch_player_and_league_stats_per_40(player_name):
     df_result = pd.DataFrame([stats_per_40_player, stats_per_40_league])
 
     return df_result
+    
+def fetch_teams():
+    if not table_exists("Teams"):
+        return []
+    conn = sqlite3.connect(db_path)
+    query = "SELECT DISTINCT name FROM Teams ORDER BY name;"
+    teams = pd.read_sql(query, conn)["name"].tolist()
+    conn.close()
+    return teams
+
+def fetch_team_games(team_name):
+    if not table_exists("Teams") or not table_exists("Games"):
+        return []
+    conn = sqlite3.connect(db_path)
+    query = f"""
+    SELECT t1.game_id, t2.name AS opponent_name
+    FROM Teams t1
+    JOIN Teams t2 ON t1.game_id = t2.game_id AND t1.name != t2.name
+    WHERE t1.name = '{team_name}'
+    ORDER BY t1.game_id;
+    """
+    games = pd.read_sql(query, conn)[["game_id", "opponent_name"]].to_records(index=False)
+    conn.close()
+    return games
+
+def fetch_pbp_actions(game_id, period):
+    if not table_exists("PlayByPlay"):
+        return pd.DataFrame()
+    conn = sqlite3.connect(db_path)
+    query = f"""
+    SELECT *
+    FROM PlayByPlay
+    WHERE game_id = {game_id} AND period = {period}
+    ORDER BY pbp_id;
+    """
+    actions = pd.read_sql(query, conn)
+    conn.close()
+    return actions
+
+def display_pbp_actions(actions):
+    if actions.empty:
+        st.warning("No actions found for the selected game and quarter.")
+    else:
+        st.dataframe(actions)
+
+def plot_score_progression(game_id, home_team, away_team):
+    pbp_data = fetch_pbp_data(game_id)
+    if pbp_data.empty:
+        st.warning("No play-by-play data found for the selected game.")
+        return
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.plot(pbp_data['timestamp'], pbp_data['home_score'], label=home_team, color='blue')
+    ax.plot(pbp_data['timestamp'], -pbp_data['away_score'], label=away_team, color='red')  # Negative for away team
+
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Score")
+    ax.set_title(f"Score Progression: {home_team} vs {away_team}")
+    ax.legend()
+    plt.xticks(rotation=45)
+
+    st.pyplot(fig)
+
+
+def fetch_pbp_data(game_id):
+    if not table_exists("PlayByPlay"):
+        return pd.DataFrame()
+    conn = sqlite3.connect(db_path)
+    query = f"""
+    SELECT 
+        pbp_id,
+        game_id,
+        team_id,
+        player_id,
+        period,
+        'REGULAR' as period_type,
+        game_time,
+        clock,
+        current_score_team1,
+        current_score_team2,
+        lead,
+        action_type,
+        sub_type,
+        previous_action,
+        success,
+        scoring,
+        qualifiers,
+        event_type,
+        result,
+        points_scored,
+        team_score,
+        opponent_score
+    FROM PlayByPlay
+    WHERE game_id = {game_id}
+    ORDER BY game_time DESC;
+    """
+    pbp_data = pd.read_sql(query, conn)
+    conn.close()
+    
+    action_type_outcomes = ["2pt", "3pt", "assist", "block", "foul", "foulon", "freethrow", "game", "jumpball", "period", "rebound", "steal", "substitution", "timeout", "turnover"]
+    sub_type_outcomes = ["layup", "dunk", "hook_shot", "fadeaway", "jump_shot", "tip_in", 
+                         "bank_shot", "pull_up", "step_back", "floater", "alley_oop", 
+                         "putback", "runner", "turnaround", "catch_and_shoot", "off_dribble"]
+    qualifier_outcomes = ["fast_break", "second_chance", "contested", "open", "assisted", "and_one", 
+                          "putback", "buzzer_beater", "catch_and_shoot", "off_dribble", 
+                          "heavily_contested", "transition", "iso_play", "pick_and_roll", 
+                          "spot_up", "post_up", "drive", "kick_out", "pull_up", 
+                          "step_back", "floater", "alley_oop", "putback", "runner", "turnaround"]
+    
+    for index, row in pbp_data.iterrows():
+        if row['action_type'] not in action_type_outcomes:
+            pbp_data.at[index, 'action_type'] = None
+        
+        if row['sub_type'] not in sub_type_outcomes:
+            pbp_data.at[index, 'sub_type'] = None
+        
+        if row['previous_action'] == 'blanket':
+            pbp_data.at[index, 'previous_action'] = pbp_data.at[index + 1, 'previous_action'] if index + 1 < len(pbp_data) else None
+        
+        pbp_data.at[index, 'success'] = 1 if row['success'] == 1 else 0
+        pbp_data.at[index, 'scoring'] = 1 if row['scoring'] == 1 else 0
+        
+        qualifiers = row['qualifiers'].split(", ") if row['qualifiers'] else []
+        pbp_data.at[index, 'qualifiers'] = ", ".join([q for q in qualifiers if q in qualifier_outcomes])
+    
+    return pbp_data
+
 
 def plot_shot_coordinates(player_name):
     conn = sqlite3.connect(db_path)
@@ -789,9 +916,26 @@ def generate_shot_chart(player_name):
     
 def main():
     st.title("🏀 Basketball Stats Viewer")
-    page = st.sidebar.selectbox("📌 Choose a page", ["Team Season Boxscore", "Head-to-Head Comparison", "Referee Stats", "Shot Chart", "Four Factors"])
+    page = st.sidebar.selectbox("📌 Choose a page", ["Team Season Boxscore", "Head-to-Head Comparison", "Referee Stats", "Shot Chart", "Four Factors", "Match Detail"])
 
-    if page == "Four Factors":
+    if page == "Match Detail":
+        teams = fetch_teams()
+        selected_team = st.selectbox("Select a Team", teams)
+
+        if selected_team:
+            games = fetch_team_games(selected_team)
+            game_options = [f"{game[1]} (Game ID: {game[0]})" for game in games]
+            selected_game = st.selectbox("Select a Game", game_options)
+
+            if selected_game:
+                selected_game_id = int(selected_game.split("Game ID: ")[1].replace(")", ""))
+                quarters = list(range(1, 5))
+                selected_quarter = st.selectbox("Select a Quarter", quarters, index=0)
+
+                actions = fetch_pbp_actions(selected_game_id, selected_quarter)
+                display_pbp_actions(actions)
+
+    elif page == "Four Factors":
         df = fetch_team_data()
         if df.empty:
             st.warning("No team data available.")
@@ -821,6 +965,7 @@ def main():
                 st.dataframe(df_matches)
             else:
                 st.warning(f"No match data available for {team1}.")
+                
 
     elif page == "Team Season Boxscore":
         df = fetch_team_data()

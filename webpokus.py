@@ -340,17 +340,31 @@ def fetch_team_games(team_name):
     conn.close()
     return games
 
-def fetch_pbp_actions(game_id, period):
+def fetch_pbp_actions(game_id, selected_quarter=None):
+    """Fetch play-by-play data for a specific quarter or the full game."""
     if not table_exists("PlayByPlay"):
         return pd.DataFrame()
+
     conn = sqlite3.connect(db_path)
-    query = f"""
-    SELECT *
-    FROM PlayByPlay
-    WHERE game_id = {game_id} AND period = {period}
-    ORDER BY pbp_id;
-    """
-    actions = pd.read_sql(query, conn)
+
+    # If a specific quarter is selected, filter by period
+    if selected_quarter is not None:
+        query = """
+        SELECT * FROM PlayByPlay
+        WHERE game_id = ? AND period = ?
+        ORDER BY pbp_id;
+        """
+        params = (game_id, selected_quarter)
+    else:
+        # Fetch all quarters if no specific quarter is selected
+        query = """
+        SELECT * FROM PlayByPlay
+        WHERE game_id = ?
+        ORDER BY period, pbp_id;
+        """
+        params = (game_id,)
+
+    actions = pd.read_sql(query, conn, params=params)
     conn.close()
     return actions
 
@@ -360,24 +374,52 @@ def display_pbp_actions(actions):
     else:
         st.dataframe(actions)
 
-def plot_score_progression(game_id, home_team, away_team):
+def plot_score_lead_full_game(game_id):
+    """Plot the score lead progression for the entire game on one timeline."""
     pbp_data = fetch_pbp_data(game_id)
+
     if pbp_data.empty:
-        st.warning("No play-by-play data found for the selected game.")
+        st.warning(f"No play-by-play data found for Game ID {game_id}.")
         return
 
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(pbp_data['timestamp'], pbp_data['home_score'], label=home_team, color='blue')
-    ax.plot(pbp_data['timestamp'], -pbp_data['away_score'], label=away_team, color='red')  # Negative for away team
+    # Convert game_time to total seconds (accounting for quarters)
+    pbp_data["Seconds"] = pbp_data.apply(
+        lambda row: (row["period"] - 1) * 600 + int(row["game_time"].split(":")[0]) * 60 + int(row["game_time"].split(":")[1]),
+        axis=1
+    )
 
-    ax.set_xlabel("Time")
-    ax.set_ylabel("Score")
-    ax.set_title(f"Score Progression: {home_team} vs {away_team}")
+    # Sort data so that time progresses correctly from start to end
+    pbp_data = pbp_data.sort_values(by="Seconds")
+
+    # Smooth the lead line using a rolling average
+    pbp_data["Smoothed Lead"] = pbp_data["lead"].rolling(window=3, min_periods=1).mean()
+
+    # Plot setup
+    fig, ax = plt.subplots(figsize=(12, 6))
+    sns.lineplot(x=pbp_data["Seconds"], y=pbp_data["Smoothed Lead"], color="dodgerblue", linewidth=2, label="Lead Progression")
+
+    # Formatting
+    ax.axhline(0, color='gray', linestyle='--')  # Baseline where lead is neutral
+    ax.set_xlabel("Game Time (Minutes:Seconds)", fontsize=12)
+    ax.set_ylabel("Lead (Team 1 - Team 2)", fontsize=12)
+    ax.set_title(f"Score Lead Progression - Full Game", fontsize=14)
+
+    # Set x-ticks at proper intervals (e.g., every 5 minutes)
+    max_seconds = pbp_data["Seconds"].max()
+    tick_positions = np.arange(0, max_seconds + 1, 300)  # Every 5 minutes
+    tick_labels = [f"{t // 60}:{t % 60:02d}" for t in tick_positions]  # Format as MM:SS
+    ax.set_xticks(tick_positions)
+    ax.set_xticklabels(tick_labels, rotation=45)
+
+    # Show quarter separators
+    for q in range(1, 5):  # Assuming a 4-quarter game
+        ax.axvline(x=q * 600, color='red', linestyle='dashed', alpha=0.5, label=f"End of Q{q}" if q < 4 else "")
+
+    # Show grid and legend
     ax.legend()
-    plt.xticks(rotation=45)
+    ax.grid(True, linestyle="--", alpha=0.6)
 
     st.pyplot(fig)
-
 
 def fetch_pbp_data(game_id):
     if not table_exists("PlayByPlay"):
@@ -401,12 +443,7 @@ def fetch_pbp_data(game_id):
         previous_action,
         success,
         scoring,
-        qualifiers,
-        event_type,
-        result,
-        points_scored,
-        team_score,
-        opponent_score
+        qualifiers
     FROM PlayByPlay
     WHERE game_id = {game_id}
     ORDER BY game_time DESC;
@@ -929,11 +966,15 @@ def main():
 
             if selected_game:
                 selected_game_id = int(selected_game.split("Game ID: ")[1].replace(")", ""))
-                quarters = list(range(1, 5))
-                selected_quarter = st.selectbox("Select a Quarter", quarters, index=0)
 
-                actions = fetch_pbp_actions(selected_game_id, selected_quarter)
+                # Fetch all quarters data correctly
+                actions = fetch_pbp_actions(selected_game_id)  
                 display_pbp_actions(actions)
+
+                # 🏀 Add Full Game Score Progression Chart
+                st.subheader(f"📈 Score Lead Progression - Full Game")
+                plot_score_lead_full_game(selected_game_id)
+
 
     elif page == "Four Factors":
         df = fetch_team_data()
@@ -1163,6 +1204,5 @@ def main():
                 }))
             else:
                 st.warning(f"No per-40 stats available for {player_name}.")
-
 if __name__ == "__main__":
     main()

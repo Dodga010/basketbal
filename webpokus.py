@@ -375,7 +375,7 @@ def display_pbp_actions(actions):
         st.dataframe(actions)
 
 def plot_score_lead_full_game(game_id):
-    """Plot the score lead progression for the entire game with correct quarter countdowns."""
+    """Plot the score lead progression for the entire game with correct left-to-right time direction."""
     pbp_data = fetch_pbp_actions(game_id)  # Fetch all quarters' data
 
     if pbp_data.empty:
@@ -389,7 +389,7 @@ def plot_score_lead_full_game(game_id):
     )
 
     # Sort data so that time progresses correctly across all quarters
-    pbp_data = pbp_data.sort_values(by=["Seconds"], ascending=True)
+    pbp_data = pbp_data.sort_values(by=["Seconds"], ascending=False)  # Reverse order to start from the left
 
     # Smooth the lead line using a rolling average
     pbp_data["Smoothed Lead"] = pbp_data["lead"].rolling(window=3, min_periods=1).mean()
@@ -415,8 +415,8 @@ def plot_score_lead_full_game(game_id):
     for q in range(1, 4):  # Add dashed lines for Q1, Q2, Q3 (Q4 ends at 0:00)
         ax.axvline(x=q * 600, color='red', linestyle='dashed', alpha=0.5, label=f"End of Q{q}")
 
-    # Invert x-axis so it properly counts down from 10:00 to 0:00 for each quarter
-    ax.invert_xaxis()
+    # DO NOT invert x-axis (now it stays in correct left-to-right order)
+    # Reversing the sorting above ensures correct plotting while keeping x-axis same
 
     # Show grid and legend
     ax.legend()

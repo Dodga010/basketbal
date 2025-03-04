@@ -1009,7 +1009,8 @@ def main():
 
                 # 🏀 Add Full Game Score Progression Chart
                 st.subheader(f"📈 Score Lead Progression - Full Game")
-		plot_score_lead_full_game(selected_game_id)
+                plot_score_lead_full_game(selected_game_id)
+
 
     elif page == "Four Factors":
         df = fetch_team_data()

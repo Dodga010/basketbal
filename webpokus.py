@@ -483,6 +483,17 @@ def fetch_pbp_data(game_id):
     
     return pbp_data
 
+def fetch_starting_five(game_id):
+    """Fetches the starting five players for each team."""
+    conn = sqlite3.connect(db_path)
+    query = """
+    SELECT first_name || ' ' || last_name AS player_name, team_id
+    FROM Players
+    WHERE game_id = ? AND starter = 1;
+    """
+    df = pd.read_sql_query(query, conn, params=(game_id,))
+    conn.close()
+    return df
 
 def plot_shot_coordinates(player_name):
     conn = sqlite3.connect(db_path)
@@ -971,13 +982,33 @@ def main():
             if selected_game:
                 selected_game_id = int(selected_game.split("Game ID: ")[1].replace(")", ""))
 
+                # Fetch starting five players for the selected game
+                starting_five = fetch_starting_five(selected_game_id)
+
+                if not starting_five.empty:
+                    # Extract home and away teams from the starting five data
+                    team_ids = starting_five['team_id'].unique()
+                    home_team = team_ids[0]
+                    away_team = team_ids[1] if len(team_ids) > 1 else "Unknown"
+
+                    st.subheader("Starting Five Players")
+
+                    st.write(f"**{home_team}**")
+                    home_starting_five = starting_five[starting_five['team_id'] == home_team]
+                    st.table(home_starting_five[['player_name']])
+
+                    st.write(f"**{away_team}**")
+                    away_starting_five = starting_five[starting_five['team_id'] == away_team]
+                    st.table(away_starting_five[['player_name']])
+                else:
+                    st.warning("No starting five players found for the selected game.")
+
                 # Fetch all quarters data correctly
-                actions = fetch_pbp_actions(selected_game_id)  
+                actions = fetch_pbp_actions(selected_game_id)
                 display_pbp_actions(actions)
 
                 # 🏀 Add Full Game Score Progression Chart
                 st.subheader(f"📈 Score Lead Progression - Full Game")
-                plot_score_lead_full_game(selected_game_id)
 
 
     elif page == "Four Factors":

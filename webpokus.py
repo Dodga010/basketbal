@@ -1057,6 +1057,37 @@ def generate_shot_chart(player_name):
     # ✅ Display chart in Streamlit
     st.pyplot(fig)
 
+def fetch_team_avg_substitutions():
+    conn = sqlite3.connect(db_path)
+    query = """
+    SELECT t.name AS team_name, AVG(sub_count) AS avg_substitutions
+    FROM (
+        SELECT game_id, team_id, COUNT(*) / 2 AS sub_count
+        FROM PlayByPlay
+        WHERE action_type = 'substitution' AND sub_type IN ('in', 'out')
+        GROUP BY game_id, team_id
+    ) AS subs
+    JOIN Teams t ON subs.team_id = t.tm AND subs.game_id = t.game_id
+    GROUP BY t.name
+    ORDER BY avg_substitutions DESC;
+    """
+    df = pd.read_sql_query(query, conn)
+    conn.close()
+    return df
+
+def display_avg_substitutions_graph():
+    avg_substitutions = fetch_team_avg_substitutions()
+    if not avg_substitutions.empty:
+        st.subheader("📊 Average Substitutions Per Game")
+        fig, ax = plt.subplots(figsize=(8, 5))
+        sns.barplot(x=avg_substitutions["team_name"], y=avg_substitutions["avg_substitutions"], ax=ax, palette="coolwarm", order=avg_substitutions["team_name"])
+        ax.set_ylabel("Avg Substitutions")
+        ax.set_xlabel("Team")
+        ax.set_title("Average Substitutions Per Game by Team")
+        ax.set_xticklabels(avg_substitutions["team_name"], rotation=45, ha="right")
+        ax.grid(axis="y", linestyle="--", alpha=0.7)
+        st.pyplot(fig)
+
     
 def main():
     st.title("🏀 Basketball Stats Viewer")
@@ -1215,6 +1246,8 @@ def main():
                 plot_assists_vs_turnovers(assists_vs_turnovers_df, game_type)
             else:
                 st.warning("No data available for Assists vs Turnovers")
+
+	display_avg_substitutions_graph()
 
     elif page == "Head-to-Head Comparison":
         df = fetch_team_data()

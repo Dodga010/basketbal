@@ -315,6 +315,98 @@ def fetch_player_and_league_stats_per_40(player_name):
     df_result = pd.DataFrame([stats_per_40_player, stats_per_40_league])
 
     return df_result
+
+def fetch_matches():
+    conn = sqlite3.connect(db_path)
+    query = """
+    SELECT DISTINCT game_id FROM Games ORDER BY game_id DESC;
+    """
+    game_ids = pd.read_sql_query(query, conn)["game_id"].tolist()
+    
+    match_dict = {}
+    for game_id in game_ids:
+        team_query = "SELECT name FROM Teams WHERE game_id = ? ORDER BY tm;"
+        teams = pd.read_sql_query(team_query, conn, params=(game_id,))["name"].tolist()
+        if len(teams) == 2:
+            match_name = f"{teams[0]} vs {teams[1]}"
+            match_dict[match_name] = game_id
+    
+    conn.close()
+    return match_dict
+
+def fetch_team_stats(game_id, team_id):
+    conn = sqlite3.connect(db_path)
+    query = """
+    SELECT name, score, field_goals_made, field_goals_attempted, field_goal_percentage,
+           three_pointers_made, three_pointers_attempted, three_point_percentage,
+           two_pointers_made, two_pointers_attempted, two_point_percentage,
+           free_throws_made, free_throws_attempted, free_throw_percentage,
+           rebounds_total, assists, turnovers, steals, blocks, fouls_total
+    FROM Teams
+    WHERE game_id = ? AND tm = ?;
+    """
+    df = pd.read_sql_query(query, conn, params=(game_id, team_id))
+    conn.close()
+    return df
+
+def count_substitutions(game_id):
+    conn = sqlite3.connect(db_path)
+    query = """
+    SELECT team_id, COUNT(*) / 2 AS substitutions
+    FROM PlayByPlay
+    WHERE game_id = ? AND action_type = 'substitution' AND sub_type IN ('in', 'out')
+    GROUP BY team_id;
+    """
+    df = pd.read_sql_query(query, conn, params=(game_id,))
+    conn.close()
+    return df
+
+def display_match_detail():
+    st.subheader("🏀 Match Detail Analysis")
+    match_dict = fetch_matches()
+    selected_match_name = st.selectbox("Select a match:", list(match_dict.keys()))
+    selected_match = match_dict[selected_match_name]
+    
+    if selected_match:
+        teams = [1, 2]
+        team_names = []
+        team_stats = []
+        
+        for team in teams:
+            stats = fetch_team_stats(selected_match, team)
+            if not stats.empty:
+                team_names.append(stats.iloc[0]["name"])
+                team_stats.append(stats)
+        
+        if len(team_stats) == 2:
+            st.write(f"### {team_names[0]} vs {team_names[1]}")
+            
+            # Reshape Data for Better Readability
+            combined_stats = pd.concat(team_stats, ignore_index=True)
+            combined_stats = combined_stats.T
+            combined_stats.columns = [team_names[0], team_names[1]]
+            combined_stats = combined_stats.reset_index().rename(columns={"index": "Statistic"})
+            
+            # Remove empty row names
+            combined_stats = combined_stats.dropna(subset=[team_names[0], team_names[1]], how='all')
+            
+            # Convert numeric columns properly
+            numeric_cols = combined_stats.columns[1:]
+            combined_stats[numeric_cols] = combined_stats[numeric_cols].apply(pd.to_numeric, errors='coerce')
+            
+            # Display Table Without Highlighting
+            st.dataframe(
+                combined_stats.style.format(
+                    {team_names[0]: "{:.1f}", team_names[1]: "{:.1f}"}
+                )
+            )
+            
+            # Fetch and Display Substitution Counts
+            substitutions = count_substitutions(selected_match)
+            if not substitutions.empty:
+                st.subheader("🔄 Substitutions")
+                substitutions["team_id"] = substitutions["team_id"].map({1: team_names[0], 2: team_names[1]})
+                st.dataframe(substitutions.rename(columns={"team_id": "Team", "substitutions": "Total Substitutions"}))
     
 def fetch_teams():
     if not table_exists("Teams"):
@@ -971,6 +1063,8 @@ def main():
     page = st.sidebar.selectbox("📌 Choose a page", ["Team Season Boxscore", "Head-to-Head Comparison", "Referee Stats", "Shot Chart", "Four Factors", "Match Detail"])
 
     if page == "Match Detail":
+	display_match_detail()
+	    
         teams = fetch_teams()
         selected_team = st.selectbox("Select a Team", teams)
 

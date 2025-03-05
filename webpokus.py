@@ -1060,11 +1060,11 @@ def generate_shot_chart(player_name):
 def fetch_team_avg_substitutions():
     conn = sqlite3.connect(db_path)
     query = """
-    SELECT t.name AS team_name, AVG(sub_count) AS avg_substitutions
+    SELECT t.name AS team_name, AVG(sub_count / 2) AS avg_substitutions
     FROM (
-        SELECT game_id, team_id, COUNT(*) / 2 AS sub_count
+        SELECT game_id, team_id, COUNT(*) AS sub_count
         FROM PlayByPlay
-        WHERE action_type = 'substitution' AND sub_type IN ('in', 'out')
+        WHERE action_type = 'substitution'
         GROUP BY game_id, team_id
     ) AS subs
     JOIN Teams t ON subs.team_id = t.tm AND subs.game_id = t.game_id

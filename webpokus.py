@@ -1217,7 +1217,7 @@ def main():
             else:
                 filtered_df = df
 
-            # Plot the selected statistic
+           # Plot the selected statistic
             if not filtered_df.empty:
                 st.subheader(f"{selected_stat} Statistics ({game_type} games)")
                 fig, ax = plt.subplots(figsize=(10, 6))
@@ -1247,7 +1247,7 @@ def main():
             else:
                 st.warning("No data available for Assists vs Turnovers")
 
-	    display_avg_substitutions_graph()
+            display_avg_substitutions_graph()
 
     elif page == "Head-to-Head Comparison":
         df = fetch_team_data()

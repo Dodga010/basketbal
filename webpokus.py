@@ -1063,6 +1063,7 @@ def main():
     page = st.sidebar.selectbox("📌 Choose a page", ["Team Season Boxscore", "Head-to-Head Comparison", "Referee Stats", "Shot Chart", "Four Factors", "Match Detail"])
 
     if page == "Match Detail":
+	    
 	display_match_detail()
 	    
         teams = fetch_teams()

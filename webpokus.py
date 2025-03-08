@@ -1075,6 +1075,108 @@ def fetch_team_avg_substitutions():
     conn.close()
     return df
 
+import streamlit as st
+import sqlite3
+import pandas as pd
+
+def convert_minutes(time_str):
+    """Convert 'MM:SS' to total minutes as a float."""
+    if isinstance(time_str, str) and ":" in time_str:
+        minutes, seconds = map(int, time_str.split(":"))
+        return minutes + (seconds / 60)
+    return 0  # Default to 0 if missing or incorrectly formatted
+
+def load_box_score_data():
+    """Fetch all games, players, and box score data."""
+    conn = sqlite3.connect("database.db")
+    query = """
+    SELECT p.game_id, p.json_player_id AS player_id, p.first_name, p.last_name, p.team_id, p.starter,
+           p.points, p.assists, p.rebounds_total, p.steals, p.blocks, p.turnovers, p.minutes_played
+    FROM Players p
+    """
+    df = pd.read_sql(query, conn)
+    conn.close()
+
+    # Convert minutes played to float
+    df["minutes_played"] = df["minutes_played"].apply(convert_minutes)
+    df["time_off_court"] = 40 - df["minutes_played"]  # Calculate time off court
+    return df
+
+def calculate_player_plus_minus():
+    """Calculates player_plus_minus using current score instead of lead."""
+    conn = sqlite3.connect("database.db")
+    query = """
+    SELECT game_id, player_id, team_id, sub_type, current_score_team1, current_score_team2
+    FROM PlayByPlay ORDER BY game_id, period, game_time
+    """
+    df_pbp = pd.read_sql(query, conn)
+    conn.close()
+
+    plus_minus_data = {}
+    
+    # Process each game separately
+    for game_id in df_pbp["game_id"].unique():
+        game_df = df_pbp[df_pbp["game_id"] == game_id]
+        game_players = load_box_score_data()
+        game_players = game_players[game_players["game_id"] == game_id]
+        active_players = {}  # Track players currently on court
+
+        for _, player in game_players.iterrows():
+            player_id = player["player_id"]
+            starter = player["starter"]
+            minutes_played = player["minutes_played"]
+            team_id = player["team_id"]
+            
+            if minutes_played == 0:
+                plus_minus_data[(game_id, player_id)] = 0
+                continue
+            
+            player_shifts = game_df[game_df["player_id"] == player_id]
+            player_plus_minus = 0
+            score_at_entry = 0 if starter == 1 else None  # Starter begins with score = 0
+            
+            for _, row in player_shifts.iterrows():
+                score = row["current_score_team1"] - row["current_score_team2"]
+                score = -score if team_id == 2 else score  # Adjust score for team 2
+                
+                if row["sub_type"] == "in":
+                    score_at_entry = score if score_at_entry is None else score_at_entry
+                elif row["sub_type"] == "out" and score_at_entry is not None:
+                    score_at_exit = score
+                    player_plus_minus += score_at_exit - score_at_entry
+                    score_at_entry = None
+
+            plus_minus_data[(game_id, player_id)] = player_plus_minus
+    
+    return plus_minus_data
+
+def lebron_analysis_page():
+    """Streamlit page for LEBRON Analysis."""
+    st.title("🏀 LEBRON Analysis")
+    st.write("This page calculates Plus-Minus using Current Score instead of Lead.")
+
+    # Load and display the box score table
+    df = load_box_score_data()
+    plus_minus_data = calculate_player_plus_minus()
+    df["player_plus_minus"] = df.apply(lambda row: plus_minus_data.get((row["game_id"], row["player_id"]), 0), axis=1)
+    
+    st.write("### Box Score Data with Plus-Minus")
+    st.dataframe(df[['game_id', 'player_id', 'first_name', 'last_name', 'team_id', 'starter', 'points', 'assists', 'rebounds_total', 'steals', 'blocks', 'turnovers', 'minutes_played', 'time_off_court', 'player_plus_minus']])
+
+
+def load_substitutions(game_id, team_id):
+    """Fetch all substitutions for a given game and team, including lead values."""
+    conn = sqlite3.connect("database.db")
+    query = """
+    SELECT game_time, period, player_id, sub_type, lead
+    FROM PlayByPlay
+    WHERE game_id = ? AND team_id = ? AND sub_type IN ('in', 'out')
+    ORDER BY game_time
+    """
+    df = pd.read_sql(query, conn, params=(game_id, team_id))
+    conn.close()
+    return df
+
 def display_avg_substitutions_graph():
     avg_substitutions = fetch_team_avg_substitutions()
     if not avg_substitutions.empty:
@@ -1091,7 +1193,7 @@ def display_avg_substitutions_graph():
     
 def main():
     st.title("🏀 Basketball Stats Viewer")
-    page = st.sidebar.selectbox("📌 Choose a page", ["Team Season Boxscore", "Head-to-Head Comparison", "Referee Stats", "Shot Chart", "Four Factors", "Match Detail"])
+    page = st.sidebar.selectbox("📌 Choose a page", ["Team Season Boxscore", "Head-to-Head Comparison", "Referee Stats", "Shot Chart", "Four Factors", "Match Detail","Lebron"])
 
     if page == "Match Detail":
         display_match_detail()
@@ -1167,8 +1269,11 @@ def main():
                 st.dataframe(df_matches)
             else:
                 st.warning(f"No match data available for {team1}.")
-                
-
+    
+    elif page == "Lebron":
+        # Run the function to display the page
+        lebron_analysis_page()
+        
     elif page == "Team Season Boxscore":
         df = fetch_team_data()
         if df.empty:

@@ -1075,93 +1075,70 @@ def fetch_team_avg_substitutions():
     conn.close()
     return df
 
-import streamlit as st
-import sqlite3
-import pandas as pd
+def get_player_list():
+    """Retrieve a list of all players from the Players table."""
+    conn = sqlite3.connect("database.db")
+    query = "SELECT DISTINCT first_name || ' ' || last_name AS player_name FROM Players ORDER BY player_name"
+    player_list = pd.read_sql(query, conn)["player_name"].tolist()
+    conn.close()
+    return player_list
 
-def convert_minutes(time_str):
-    """Convert 'MM:SS' to total minutes as a float."""
-    if isinstance(time_str, str) and ":" in time_str:
-        minutes, seconds = map(int, time_str.split(":"))
-        return minutes + (seconds / 60)
-    return 0  # Default to 0 if missing or incorrectly formatted
-
-def load_box_score_data():
-    """Fetch all games, players, and box score data."""
+def fetch_player_games(player_name):
+    """Fetch all games a player has played in, showing substitutions and lead values in separate alternating columns."""
     conn = sqlite3.connect("database.db")
     query = """
-    SELECT p.game_id, p.json_player_id AS player_id, p.first_name, p.last_name, p.team_id, p.starter,
-           p.points, p.assists, p.rebounds_total, p.steals, p.blocks, p.turnovers, p.minutes_played
+    SELECT p.game_id, p.team_id, p.starter, 
+           pbp.sub_type AS substitution, 
+           pbp.lead AS lead_value
     FROM Players p
+    JOIN PlayByPlay pbp ON pbp.game_id = p.game_id AND pbp.player_id = p.json_player_id AND pbp.team_id = p.team_id
+    WHERE p.first_name || ' ' || p.last_name = ? AND pbp.action_type = 'substitution'
+    ORDER BY p.game_id ASC, pbp.action_number ASC
     """
-    df = pd.read_sql(query, conn)
+    df = pd.read_sql_query(query, conn, params=(player_name,))
     conn.close()
-
-    # Convert minutes played to float
-    df["minutes_played"] = df["minutes_played"].apply(convert_minutes)
-    df["time_off_court"] = 40 - df["minutes_played"]  # Calculate time off court
-    return df
-
-def calculate_player_plus_minus():
-    """Calculates player_plus_minus using current score instead of lead."""
-    conn = sqlite3.connect("database.db")
-    query = """
-    SELECT game_id, player_id, team_id, sub_type, current_score_team1, current_score_team2
-    FROM PlayByPlay ORDER BY game_id, period, game_time
-    """
-    df_pbp = pd.read_sql(query, conn)
-    conn.close()
-
-    plus_minus_data = {}
     
-    # Process each game separately
-    for game_id in df_pbp["game_id"].unique():
-        game_df = df_pbp[df_pbp["game_id"] == game_id]
-        game_players = load_box_score_data()
-        game_players = game_players[game_players["game_id"] == game_id]
-        active_players = {}  # Track players currently on court
-
-        for _, player in game_players.iterrows():
-            player_id = player["player_id"]
-            starter = player["starter"]
-            minutes_played = player["minutes_played"]
-            team_id = player["team_id"]
-            
-            if minutes_played == 0:
-                plus_minus_data[(game_id, player_id)] = 0
-                continue
-            
-            player_shifts = game_df[game_df["player_id"] == player_id]
-            player_plus_minus = 0
-            score_at_entry = 0 if starter == 1 else None  # Starter begins with score = 0
-            
-            for _, row in player_shifts.iterrows():
-                score = row["current_score_team1"] - row["current_score_team2"]
-                score = -score if team_id == 2 else score  # Adjust score for team 2
-                
-                if row["sub_type"] == "in":
-                    score_at_entry = score if score_at_entry is None else score_at_entry
-                elif row["sub_type"] == "out" and score_at_entry is not None:
-                    score_at_exit = score
-                    player_plus_minus += score_at_exit - score_at_entry
-                    score_at_entry = None
-
-            plus_minus_data[(game_id, player_id)] = player_plus_minus
+    # Organizing player substitution data into alternating columns for substitution type and lead value
+    player_data = {}
+    for _, row in df.iterrows():
+        player_key = (row['game_id'], row['team_id'], row['starter'])
+        player_data.setdefault(player_key, []).append((row['substitution'], -row['lead_value'] if row['team_id'] == 2 else row['lead_value']))
     
-    return plus_minus_data
-
-def lebron_analysis_page():
-    """Streamlit page for LEBRON Analysis."""
-    st.title("🏀 LEBRON Analysis")
-    st.write("This page calculates Plus-Minus using Current Score instead of Lead.")
-
-    # Load and display the box score table
-    df = load_box_score_data()
-    plus_minus_data = calculate_player_plus_minus()
-    df["player_plus_minus"] = df.apply(lambda row: plus_minus_data.get((row["game_id"], row["player_id"]), 0), axis=1)
+    # Find max number of substitutions across players
+    max_subs = max(len(events) for events in player_data.values()) if player_data else 0
     
-    st.write("### Box Score Data with Plus-Minus")
-    st.dataframe(df[['game_id', 'player_id', 'first_name', 'last_name', 'team_id', 'starter', 'points', 'assists', 'rebounds_total', 'steals', 'blocks', 'turnovers', 'minutes_played', 'time_off_court', 'player_plus_minus']])
+    formatted_data = []
+    for key, events in player_data.items():
+        row_data = list(key)
+        for event in events:
+            row_data.append(event[0])  # 'in' or 'out'
+            row_data.append(event[1])  # lead value
+        while len(row_data) < 3 + max_subs * 2:  # Adjust for missing values, ensuring structure
+            row_data.append(None)
+        formatted_data.append(row_data)
+    
+    # Define column names
+    columns = ['game_id', 'team_id', 'starter']
+    for i in range(max_subs):
+        columns.extend([f'substitution_{i+1}', f'lead_value_{i+1}'])
+    
+    df_formatted = pd.DataFrame(formatted_data, columns=columns)
+    return df_formatted
+
+def player_game_summary_page():
+    """Streamlit page for selecting a player and viewing their games, starter status, and structured substitutions with lead values."""
+    st.title("🏀 Player Game Summary")
+    st.write("Select a player to view all games they have played in, whether they were a starter, and their substitutions with lead scores in structured columns.")
+
+    # Dropdown for selecting a player
+    player_list = get_player_list()
+    selected_player = st.selectbox("Select Player", player_list)
+    
+    if selected_player:
+        # Fetch player's games
+        df_games = fetch_player_games(selected_player)
+        st.write(f"### Games Played by {selected_player}")
+        st.dataframe(df_games)
 
 
 def load_substitutions(game_id, team_id):
@@ -1272,7 +1249,7 @@ def main():
     
     elif page == "Lebron":
         # Run the function to display the page
-        lebron_analysis_page()
+        player_game_summary_page()
         
     elif page == "Team Season Boxscore":
         df = fetch_team_data()

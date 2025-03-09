@@ -1084,7 +1084,7 @@ def get_player_list():
     return player_list
 
 def fetch_player_games(player_name):
-    """Fetch all games a player has played in, showing substitutions and lead values in separate alternating columns."""
+    """Fetch all games a player has played in, showing substitutions and lead values in separate alternating columns, adding 'out' substitution if the last event is 'in' and 'in' substitution with lead 0 if starter."""
     conn = sqlite3.connect("database.db")
     query = """
     SELECT p.game_id, p.team_id, p.starter, 
@@ -1110,16 +1110,28 @@ def fetch_player_games(player_name):
     formatted_data = []
     for key, events in player_data.items():
         row_data = list(key)
+        
+        # If the player was a starter, add an initial 'in' substitution with lead 0
+        if key[2] == 1:
+            row_data.append('in')
+            row_data.append(0)
+        
         for event in events:
             row_data.append(event[0])  # 'in' or 'out'
             row_data.append(event[1])  # lead value
-        while len(row_data) < 3 + max_subs * 2:  # Adjust for missing values, ensuring structure
+        
+        # If the last substitution is 'in', add a final 'out' substitution with the last lead value
+        if events and events[-1][0] == 'in':
+            row_data.append('out')
+            row_data.append(events[-1][1])
+        
+        while len(row_data) < 3 + (max_subs + 2) * 2:  # Adjust for missing values, ensuring structure
             row_data.append(None)
         formatted_data.append(row_data)
     
     # Define column names
     columns = ['game_id', 'team_id', 'starter']
-    for i in range(max_subs):
+    for i in range(max_subs + 2):  # Extra column for possible final 'out' and initial 'in'
         columns.extend([f'substitution_{i+1}', f'lead_value_{i+1}'])
     
     df_formatted = pd.DataFrame(formatted_data, columns=columns)
@@ -1128,7 +1140,7 @@ def fetch_player_games(player_name):
 def player_game_summary_page():
     """Streamlit page for selecting a player and viewing their games, starter status, and structured substitutions with lead values."""
     st.title("🏀 Player Game Summary")
-    st.write("Select a player to view all games they have played in, whether they were a starter, and their substitutions with lead scores in structured columns.")
+    st.write("Select a player to view all games they have played in, whether they were a starter, and their substitutions with lead scores in structured columns. If the player finished the game on the court, a final 'out' substitution is added. Starters will have an initial 'in' substitution with lead 0.")
 
     # Dropdown for selecting a player
     player_list = get_player_list()

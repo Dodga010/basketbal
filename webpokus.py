@@ -1075,12 +1075,32 @@ def fetch_team_avg_substitutions():
     conn.close()
     return df
 
-def get_player_list():
+# Define SQLite database path
+db_path = os.path.join(os.path.dirname(__file__), "database.db")
+
+# Function to check if a table exists
+def table_exists(table_name):
     conn = sqlite3.connect(db_path)
-    query = "SELECT DISTINCT first_name || ' ' || last_name AS player_name FROM Players ORDER BY player_name"
-    player_list = pd.read_sql(query, conn)["player_name"].tolist()
+    cursor = conn.cursor()
+    cursor.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{table_name}';")
+    exists = cursor.fetchone() is not None
     conn.close()
-    return player_list
+    return exists
+
+def fetch_final_lead_value(game_id, team_id):
+    conn = sqlite3.connect(db_path)
+    query = """
+    SELECT lead
+    FROM PlayByPlay
+    WHERE game_id = ?
+    ORDER BY action_number DESC
+    LIMIT 1;
+    """
+    final_lead_value = pd.read_sql_query(query, conn, params=(game_id,)).squeeze()
+    conn.close()
+    if team_id == 2:
+        final_lead_value = -final_lead_value
+    return final_lead_value
 
 def fetch_player_games(player_name):
     conn = sqlite3.connect(db_path)
@@ -1095,61 +1115,65 @@ def fetch_player_games(player_name):
     """
     df = pd.read_sql_query(query, conn, params=(player_name,))
     conn.close()
-    
+
     player_data = {}
     for _, row in df.iterrows():
         player_key = (row['game_id'], row['team_id'], row['starter'])
         player_data.setdefault(player_key, []).append((row['substitution'], -row['lead_value'] if row['team_id'] == 2 else row['lead_value']))
-    
+
     max_subs = max(len(events) for events in player_data.values()) if player_data else 0
-    
+
     formatted_data = []
     for key, events in player_data.items():
         row_data = list(key)
-        
+
         if key[2] == 1:
             row_data.append('in')
             row_data.append(0)
-        
+
         for event in events:
             row_data.append(event[0])
             row_data.append(event[1])
-        
+
         if events and events[-1][0] == 'in':
             row_data.append('out')
             row_data.append(events[-1][1])
-        
+
         while len(row_data) < 3 + (max_subs + 2) * 2:
             row_data.append(None)
         formatted_data.append(row_data)
-    
+
     columns = ['game_id', 'team_id', 'starter']
     for i in range(max_subs + 2):
         columns.extend([f'substitution_{i+1}', f'lead_value_{i+1}'])
-    
+
     df_formatted = pd.DataFrame(formatted_data, columns=columns)
-    
-    df_formatted['plus_minus'] = df_formatted.apply(calculate_plus_minus, axis=1)
-    
+
+    df_formatted['plus_minus_on'] = df_formatted.apply(lambda row: calculate_plus_minus(row, on_court=True), axis=1)
+    df_formatted['final_lead_value'] = df_formatted.apply(lambda row: fetch_final_lead_value(row['game_id'], row['team_id']), axis=1)
+    df_formatted['plus_minus_off'] = df_formatted['final_lead_value'] - df_formatted['plus_minus_on']
+
     return df_formatted
 
-def calculate_plus_minus(row):
+def calculate_plus_minus(row, on_court=True):
     plus_minus = 0
     in_game_lead = None
-    for i in range(3, len(row), 2):
-        if pd.isna(row[i]):
-            break
-        if row[i] == 'in':
-            in_game_lead = row[i + 1]
-        elif row[i] == 'out' and in_game_lead is not None:
-            plus_minus += row[i + 1] - in_game_lead
-            in_game_lead = None
+    events = [(row[i], row[i + 1]) for i in range(3, len(row) - 1, 2) if pd.notna(row[i])]
+
+    if on_court:
+        for event, lead in events:
+            if event == 'in':
+                in_game_lead = lead
+            elif event == 'out' and in_game_lead is not None:
+                plus_minus += lead - in_game_lead
+                in_game_lead = None
+
     return plus_minus
 
 def player_game_summary_page():
     st.title("🏀 Player Game Summary")
-    st.write("Select a player to view all games they have played in, whether they were a starter, and their substitutions with lead scores in structured columns. If the player finished the game on the court, a final 'out' substitution is added. Starters will have an initial 'in' substitution with lead 0.")
-
+    st.write("Select a player to view all games they have played in, whether they were a starter, and their substitutions with lead scores in structured columns. If the player finished the game on the court, the last lead score is recorded.")
+    
     player_list = get_player_list()
     selected_player = st.selectbox("Select Player", player_list)
     
@@ -1157,9 +1181,16 @@ def player_game_summary_page():
         df_games = fetch_player_games(selected_player)
         st.write(f"### Games Played by {selected_player}")
         st.dataframe(df_games)
-
+        
         st.write(f"### Plus-Minus for {selected_player}")
-        st.dataframe(df_games[['game_id', 'plus_minus']])
+        st.dataframe(df_games[['game_id', 'plus_minus_on', 'plus_minus_off', 'final_lead_value']])
+
+def get_player_list():
+    conn = sqlite3.connect(db_path)
+    query = "SELECT DISTINCT first_name || ' ' || last_name AS player_name FROM Players ORDER BY player_name"
+    player_list = pd.read_sql(query, conn)["player_name"].tolist()
+    conn.close()
+    return player_list
 
 
 def load_substitutions(game_id, team_id):

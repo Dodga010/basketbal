@@ -1087,20 +1087,12 @@ def table_exists(table_name):
     conn.close()
     return exists
 
-def fetch_final_lead_value(game_id, team_id):
-    conn = sqlite3.connect(db_path)
-    query = """
-    SELECT lead
-    FROM PlayByPlay
-    WHERE game_id = ?
-    ORDER BY action_number DESC
-    LIMIT 1;
-    """
-    final_lead_value = pd.read_sql_query(query, conn, params=(game_id,)).squeeze()
-    conn.close()
-    if team_id == 2:
-        final_lead_value = -final_lead_value
-    return final_lead_value
+import pandas as pd
+import sqlite3
+import streamlit as st
+import os
+
+db_path = os.path.join(os.path.dirname(__file__), "database.db")
 
 def fetch_player_games(player_name):
     conn = sqlite3.connect(db_path)
@@ -1109,10 +1101,13 @@ def fetch_player_games(player_name):
            pbp.sub_type AS substitution, 
            pbp.lead AS lead_value, 
            pbp.current_score_team1, 
-           pbp.current_score_team2
+           pbp.current_score_team2,
+           pbp.action_type, 
+           pbp.team_id AS pbp_team_id,
+           pbp.action_number
     FROM Players p
     JOIN PlayByPlay pbp ON pbp.game_id = p.game_id AND pbp.player_id = p.json_player_id AND pbp.team_id = p.team_id
-    WHERE p.first_name || ' ' || p.last_name = ? AND pbp.action_type = 'substitution'
+    WHERE p.first_name || ' ' || p.last_name = ? AND pbp.action_type IN ('substitution', '2pt', '3pt')
     ORDER BY p.game_id ASC, pbp.action_number ASC
     """
     df = pd.read_sql_query(query, conn, params=(player_name,))
@@ -1121,7 +1116,7 @@ def fetch_player_games(player_name):
     player_data = {}
     for _, row in df.iterrows():
         player_key = (row['game_id'], row['team_id'], row['starter'])
-        player_data.setdefault(player_key, []).append((row['substitution'], row['lead_value'], row['current_score_team1'], row['current_score_team2']))
+        player_data.setdefault(player_key, []).append((row['substitution'], row['lead_value'], row['current_score_team1'], row['current_score_team2'], row['action_type'], row['pbp_team_id'], row['action_number']))
 
     max_subs = max(len(events) for events in player_data.values()) if player_data else 0
 
@@ -1134,26 +1129,35 @@ def fetch_player_games(player_name):
             row_data.append(0)
             row_data.append(0)
             row_data.append(0)
+            row_data.append(None)
+            row_data.append(None)
+            row_data.append(1)
 
         for event in events:
             row_data.append(event[0])
             row_data.append(event[1])
             row_data.append(event[2])
             row_data.append(event[3])
+            row_data.append(event[4])
+            row_data.append(event[5])
+            row_data.append(event[6])
 
         if events and events[-1][0] == 'in':
             row_data.append('out')
             row_data.append(events[-1][1])
             row_data.append(events[-1][2])
             row_data.append(events[-1][3])
+            row_data.append(None)
+            row_data.append(None)
+            row_data.append(events[-1][6] + 1)
 
-        while len(row_data) < 3 + (max_subs + 2) * 4:
+        while len(row_data) < 3 + (max_subs + 2) * 7:
             row_data.append(None)
         formatted_data.append(row_data)
 
     columns = ['game_id', 'team_id', 'starter']
     for i in range(max_subs + 2):
-        columns.extend([f'substitution_{i+1}', f'lead_value_{i+1}', f'current_score_team1_{i+1}', f'current_score_team2_{i+1}'])
+        columns.extend([f'substitution_{i+1}', f'lead_value_{i+1}', f'current_score_team1_{i+1}', f'current_score_team2_{i+1}', f'action_type_{i+1}', f'pbp_team_id_{i+1}', f'action_number_{i+1}'])
 
     df_formatted = pd.DataFrame(formatted_data, columns=columns)
 
@@ -1161,13 +1165,14 @@ def fetch_player_games(player_name):
     df_formatted['final_lead_value'] = df_formatted.apply(lambda row: fetch_final_lead_value(row['game_id'], row['team_id']), axis=1)
     df_formatted['plus_minus_off'] = df_formatted['final_lead_value'] - df_formatted['plus_minus_on']
     df_formatted['points_allowed_on'] = df_formatted.apply(lambda row: calculate_points_allowed(row), axis=1)
+    df_formatted['fga_by_opponent'] = df_formatted.apply(lambda row: calculate_fga_by_opponent(row), axis=1)
 
     return df_formatted
 
 def calculate_plus_minus(row, on_court=True):
     plus_minus = 0
     in_game_lead = None
-    events = [(row[i], row[i + 1]) for i in range(3, len(row) - 1, 4) if pd.notna(row[i])]
+    events = [(row[i], row[i + 1]) for i in range(3, len(row) - 1, 7) if pd.notna(row[i])]
 
     if on_court:
         for event, lead in events:
@@ -1182,7 +1187,7 @@ def calculate_plus_minus(row, on_court=True):
 def calculate_points_allowed(row):
     points_allowed = 0
     in_game_score = None
-    events = [(row[i], row[i + 1], row[i + 2], row[i + 3]) for i in range(3, len(row) - 3, 4) if pd.notna(row[i])]
+    events = [(row[i], row[i + 1], row[i + 2], row[i + 3]) for i in range(3, len(row) - 3, 7) if pd.notna(row[i])]
 
     for event, lead, score1, score2 in events:
         if event == 'in':
@@ -1193,6 +1198,40 @@ def calculate_points_allowed(row):
             in_game_score = None
 
     return points_allowed
+
+def calculate_fga_by_opponent(row):
+    fga_by_opponent = 0
+    in_game = False
+    action_start = None
+    events = [(row[i], row[i + 4], row[i + 5], row[i + 6]) for i in range(3, len(row) - 6, 7) if pd.notna(row[i])]
+
+    for event, action_type, pbp_team_id, action_number in events:
+        if event == 'in':
+            in_game = True
+            action_start = action_number
+        elif event == 'out':
+            in_game = False
+            action_end = action_number
+            fga_by_opponent += count_fga_between(row['game_id'], action_start, action_end, row['team_id'])
+        elif in_game and action_type in ['2pt', '3pt'] and pbp_team_id != row['team_id']:
+            fga_by_opponent += 1
+
+    if in_game:  # If player is still in the game till the end
+        action_end = max(events, key=lambda x: x[3])[3]
+        fga_by_opponent += count_fga_between(row['game_id'], action_start, action_end, row['team_id'])
+
+    return fga_by_opponent
+
+def count_fga_between(game_id, start_action, end_action, team_id):
+    conn = sqlite3.connect(db_path)
+    query = """
+    SELECT COUNT(*)
+    FROM PlayByPlay
+    WHERE game_id = ? AND action_number BETWEEN ? AND ? AND action_type IN ('2pt', '3pt') AND team_id != ?
+    """
+    count = pd.read_sql_query(query, conn, params=(game_id, start_action, end_action, team_id)).squeeze()
+    conn.close()
+    return count
 
 def fetch_final_lead_value(game_id, team_id):
     conn = sqlite3.connect(db_path)
@@ -1222,7 +1261,7 @@ def player_game_summary_page():
         st.dataframe(df_games)
         
         st.write(f"### Plus-Minus for {selected_player}")
-        st.dataframe(df_games[['game_id', 'plus_minus_on', 'plus_minus_off', 'final_lead_value', 'points_allowed_on']])
+        st.dataframe(df_games[['game_id', 'plus_minus_on', 'plus_minus_off', 'final_lead_value', 'points_allowed_on', 'fga_by_opponent']])
 
 def get_player_list():
     conn = sqlite3.connect(db_path)

@@ -1107,10 +1107,17 @@ def fetch_player_games(player_name):
            pbp.sub_type,
            pbp.team_id AS pbp_team_id,
            pbp.action_number,
-           p.minutes_played
+           p.minutes_played,
+           p.points AS PTS,
+           p.assists AS AST,
+           p.three_pointers_made AS threePM,
+           p.three_pointers_attempted AS threePA,
+           p.free_throws_attempted AS FTA,
+           p.rebounds_offensive AS ORB
     FROM Players p
     JOIN PlayByPlay pbp ON pbp.game_id = p.game_id AND pbp.player_id = p.json_player_id AND pbp.team_id = p.team_id
-    WHERE p.first_name || ' ' || p.last_name = ? AND pbp.action_type IN ('substitution', '2pt', '3pt', 'rebound', 'turnover', 'freethrow')
+    WHERE p.first_name || ' ' || p.last_name = ?
+      AND pbp.action_type IN ('substitution', '2pt', '3pt', 'rebound', 'turnover', 'freethrow')
     ORDER BY p.game_id ASC, pbp.action_number ASC
     """
     df = pd.read_sql_query(query, conn, params=(player_name,))
@@ -1145,12 +1152,14 @@ def fetch_player_games(player_name):
             row_data.append(1)
 
         for event in events:
-            row_data.extend(event)
+            lead_value = -event[1] if key[1] == 2 else event[1]  # Invert lead value if team_id is 2
+            row_data.extend((event[0], lead_value, event[2], event[3], event[4], event[5], event[6], event[7]))
 
         if events and events[-1][0] == 'in':
             last_action_number = fetch_last_action_number(events[-1][0])
+            lead_value = -events[-1][1] if key[1] == 2 else events[-1][1]  # Invert lead value if team_id is 2
             row_data.append('out')
-            row_data.append(events[-1][1])
+            row_data.append(lead_value)
             row_data.append(events[-1][2])
             row_data.append(events[-1][3])
             row_data.append(None)
@@ -1171,7 +1180,14 @@ def fetch_player_games(player_name):
     columns = ['game_id', 'team_id', 'starter']
     for i in range(max_subs + 2):
         columns.extend([f'substitution_{i+1}', f'lead_value_{i+1}', f'current_score_team1_{i+1}', f'current_score_team2_{i+1}', f'action_type_{i+1}', f'sub_type_{i+1}', f'pbp_team_id_{i+1}', f'action_number_{i+1}'])
-    columns.extend(['minutes_played', 'weight_factor'])  # Adding weight_factor column
+    columns.extend(['minutes_played', 'weight_factor', 'PTS', 'AST', 'threePM', 'threePA', 'FTA', 'ORB'])  # Adding weight_factor and player stats columns
+
+    # Ensure all rows in formatted_data have the same length as columns
+    for row in formatted_data:
+        while len(row) < len(columns):
+            row.append(None)
+        while len(row) > len(columns):
+            row.pop()
 
     df_formatted = pd.DataFrame(formatted_data, columns=columns)
 
@@ -1192,6 +1208,24 @@ def fetch_player_games(player_name):
     
     # Calculate PM_bias
     df_formatted['PM_bias'] = (df_formatted['plus_minus_on'] + df_formatted['weight_factor'] * pm_league_avg) / (1 + df_formatted['weight_factor'])
+
+    # Calculate oLEBRON
+    weights = {
+        'PTS': 0.80,
+        'AST': 0.75,
+        'threePM': 0.60,
+        'threePA': 0.45,
+        'FTA': 0.55,
+        'ORB': 0.40,
+        'PM_bias': 0.50
+    }
+    df_formatted['oLEBRON'] = (weights['PTS'] * df_formatted['PTS'] +
+                               weights['AST'] * df_formatted['AST'] +
+                               weights['threePM'] * df_formatted['threePM'] +
+                               weights['threePA'] * df_formatted['threePA'] +
+                               weights['FTA'] * df_formatted['FTA'] +
+                               weights['ORB'] * df_formatted['ORB'] +
+                               weights['PM_bias'] * df_formatted['PM_bias'])
 
     return df_formatted
 

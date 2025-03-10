@@ -1143,13 +1143,14 @@ def fetch_player_games(player_name):
             row_data.append(event[6])
 
         if events and events[-1][0] == 'in':
+            last_action_number = fetch_last_action_number(events[-1][0])
             row_data.append('out')
             row_data.append(events[-1][1])
             row_data.append(events[-1][2])
             row_data.append(events[-1][3])
             row_data.append(None)
             row_data.append(None)
-            row_data.append(events[-1][6] + 1)
+            row_data.append(last_action_number)
 
         while len(row_data) < 3 + (max_subs + 2) * 7:
             row_data.append(None)
@@ -1169,6 +1170,30 @@ def fetch_player_games(player_name):
 
     return df_formatted
 
+def fetch_last_action_number(game_id):
+    conn = sqlite3.connect(db_path)
+    query = """
+    SELECT MAX(action_number) AS last_action_number
+    FROM PlayByPlay
+    WHERE game_id = ?
+    """
+    last_action_number = pd.read_sql_query(query, conn, params=(game_id,)).squeeze()
+    conn.close()
+    return last_action_number
+
+def fetch_final_scores(game_id):
+    conn = sqlite3.connect(db_path)
+    query = """
+    SELECT current_score_team1, current_score_team2
+    FROM PlayByPlay
+    WHERE game_id = ?
+    ORDER BY action_number DESC
+    LIMIT 1;
+    """
+    scores = pd.read_sql_query(query, conn, params=(game_id,)).squeeze()
+    conn.close()
+    return scores
+
 def calculate_plus_minus(row, on_court=True):
     plus_minus = 0
     in_game_lead = None
@@ -1187,15 +1212,20 @@ def calculate_plus_minus(row, on_court=True):
 def calculate_points_allowed(row):
     points_allowed = 0
     in_game_score = None
-    events = [(row[i], row[i + 1], row[i + 2], row[i + 3]) for i in range(3, len(row) - 3, 7) if pd.notna(row[i])]
+    events = [(row[i], row[i + 1], row[i + 2], row[i + 3], row[i + 6]) for i in range(3, len(row) - 3, 7) if pd.notna(row[i])]
 
-    for event, lead, score1, score2 in events:
+    for event, lead, score1, score2, action_number in events:
         if event == 'in':
             in_game_score = score1 if row['team_id'] == 2 else score2
         elif event == 'out' and in_game_score is not None:
             current_score = score1 if row['team_id'] == 2 else score2
             points_allowed += current_score - in_game_score
             in_game_score = None
+
+    if in_game_score is not None:  # If player is still in the game till the end
+        final_scores = fetch_final_scores(row['game_id'])
+        current_score = final_scores['current_score_team1'] if row['team_id'] == 2 else final_scores['current_score_team2']
+        points_allowed += current_score - in_game_score
 
     return points_allowed
 
@@ -1217,7 +1247,7 @@ def calculate_fga_by_opponent(row):
             fga_by_opponent += 1
 
     if in_game:  # If player is still in the game till the end
-        action_end = max(events, key=lambda x: x[3])[3]
+        action_end = fetch_last_action_number(row['game_id'])
         fga_by_opponent += count_fga_between(row['game_id'], action_start, action_end, row['team_id'])
 
     return fga_by_opponent

@@ -1209,24 +1209,6 @@ def fetch_player_games(player_name):
     # Calculate PM_bias
     df_formatted['PM_bias'] = (df_formatted['plus_minus_on'] + df_formatted['weight_factor'] * pm_league_avg) / (1 + df_formatted['weight_factor'])
 
-    # Calculate oLEBRON
-    weights = {
-        'PTS': 0.80,
-        'AST': 0.75,
-        'threePM': 0.60,
-        'threePA': 0.45,
-        'FTA': 0.55,
-        'ORB': 0.40,
-        'PM_bias': 0.50
-    }
-    df_formatted['oLEBRON'] = (weights['PTS'] * df_formatted['PTS'] +
-                               weights['AST'] * df_formatted['AST'] +
-                               weights['threePM'] * df_formatted['threePM'] +
-                               weights['threePA'] * df_formatted['threePA'] +
-                               weights['FTA'] * df_formatted['FTA'] +
-                               weights['ORB'] * df_formatted['ORB'] +
-                               weights['PM_bias'] * df_formatted['PM_bias'])
-
     return df_formatted
 
 def fetch_last_action_number(game_id):

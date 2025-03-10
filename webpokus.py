@@ -1103,11 +1103,12 @@ def fetch_player_games(player_name):
            pbp.current_score_team1, 
            pbp.current_score_team2,
            pbp.action_type, 
+           pbp.sub_type, 
            pbp.team_id AS pbp_team_id,
            pbp.action_number
     FROM Players p
     JOIN PlayByPlay pbp ON pbp.game_id = p.game_id AND pbp.player_id = p.json_player_id AND pbp.team_id = p.team_id
-    WHERE p.first_name || ' ' || p.last_name = ? AND pbp.action_type IN ('substitution', '2pt', '3pt')
+    WHERE p.first_name || ' ' || p.last_name = ? AND pbp.action_type IN ('substitution', '2pt', '3pt', 'rebound', 'turnover', 'freethrow')
     ORDER BY p.game_id ASC, pbp.action_number ASC
     """
     df = pd.read_sql_query(query, conn, params=(player_name,))
@@ -1116,7 +1117,7 @@ def fetch_player_games(player_name):
     player_data = {}
     for _, row in df.iterrows():
         player_key = (row['game_id'], row['team_id'], row['starter'])
-        player_data.setdefault(player_key, []).append((row['substitution'], row['lead_value'], row['current_score_team1'], row['current_score_team2'], row['action_type'], row['pbp_team_id'], row['action_number']))
+        player_data.setdefault(player_key, []).append((row['substitution'], row['lead_value'], row['current_score_team1'], row['current_score_team2'], row['action_type'], row['sub_type'], row['pbp_team_id'], row['action_number']))
 
     max_subs = max(len(events) for events in player_data.values()) if player_data else 0
 
@@ -1131,6 +1132,7 @@ def fetch_player_games(player_name):
             row_data.append(0)
             row_data.append(None)
             row_data.append(None)
+            row_data.append(None)
             row_data.append(1)
 
         for event in events:
@@ -1141,6 +1143,7 @@ def fetch_player_games(player_name):
             row_data.append(event[4])
             row_data.append(event[5])
             row_data.append(event[6])
+            row_data.append(event[7])
 
         if events and events[-1][0] == 'in':
             last_action_number = fetch_last_action_number(events[-1][0])
@@ -1150,15 +1153,16 @@ def fetch_player_games(player_name):
             row_data.append(events[-1][3])
             row_data.append(None)
             row_data.append(None)
+            row_data.append(None)
             row_data.append(last_action_number)
 
-        while len(row_data) < 3 + (max_subs + 2) * 7:
+        while len(row_data) < 3 + (max_subs + 2) * 8:
             row_data.append(None)
         formatted_data.append(row_data)
 
     columns = ['game_id', 'team_id', 'starter']
     for i in range(max_subs + 2):
-        columns.extend([f'substitution_{i+1}', f'lead_value_{i+1}', f'current_score_team1_{i+1}', f'current_score_team2_{i+1}', f'action_type_{i+1}', f'pbp_team_id_{i+1}', f'action_number_{i+1}'])
+        columns.extend([f'substitution_{i+1}', f'lead_value_{i+1}', f'current_score_team1_{i+1}', f'current_score_team2_{i+1}', f'action_type_{i+1}', f'sub_type_{i+1}', f'pbp_team_id_{i+1}', f'action_number_{i+1}'])
 
     df_formatted = pd.DataFrame(formatted_data, columns=columns)
 
@@ -1166,7 +1170,10 @@ def fetch_player_games(player_name):
     df_formatted['final_lead_value'] = df_formatted.apply(lambda row: fetch_final_lead_value(row['game_id'], row['team_id']), axis=1)
     df_formatted['plus_minus_off'] = df_formatted['final_lead_value'] - df_formatted['plus_minus_on']
     df_formatted['points_allowed_on'] = df_formatted.apply(lambda row: calculate_points_allowed(row), axis=1)
-    df_formatted['fga_by_opponent'] = df_formatted.apply(lambda row: calculate_fga_by_opponent(row), axis=1)
+    df_formatted['efga_by_opponent'] = df_formatted.apply(lambda row: calculate_efga_by_opponent(row), axis=1)
+    df_formatted['offensive_rebounds_by_opponent'] = df_formatted.apply(lambda row: calculate_offensive_rebounds_by_opponent(row), axis=1)
+    df_formatted['turnovers_by_opponent'] = df_formatted.apply(lambda row: calculate_turnovers_by_opponent(row), axis=1)
+    df_formatted['freethrows_by_opponent'] = df_formatted.apply(lambda row: calculate_freethrows_by_opponent(row), axis=1)
 
     return df_formatted
 
@@ -1197,7 +1204,7 @@ def fetch_final_scores(game_id):
 def calculate_plus_minus(row, on_court=True):
     plus_minus = 0
     in_game_lead = None
-    events = [(row[i], row[i + 1]) for i in range(3, len(row) - 1, 7) if pd.notna(row[i])]
+    events = [(row[i], row[i + 1]) for i in range(3, len(row) - 1, 8) if pd.notna(row[i])]
 
     if on_court:
         for event, lead in events:
@@ -1212,7 +1219,7 @@ def calculate_plus_minus(row, on_court=True):
 def calculate_points_allowed(row):
     points_allowed = 0
     in_game_score = None
-    events = [(row[i], row[i + 1], row[i + 2], row[i + 3], row[i + 6]) for i in range(3, len(row) - 3, 7) if pd.notna(row[i])]
+    events = [(row[i], row[i + 1], row[i + 2], row[i + 3], row[i + 7]) for i in range(3, len(row) - 3, 8) if pd.notna(row[i])]
 
     for event, lead, score1, score2, action_number in events:
         if event == 'in':
@@ -1229,35 +1236,140 @@ def calculate_points_allowed(row):
 
     return points_allowed
 
-def calculate_fga_by_opponent(row):
-    fga_by_opponent = 0
+def calculate_efga_by_opponent(row):
+    efga_by_opponent = 0
     in_game = False
     action_start = None
-    events = [(row[i], row[i + 4], row[i + 5], row[i + 6]) for i in range(3, len(row) - 6, 7) if pd.notna(row[i])]
+    events = [(row[i], row[i + 4], row[i + 5], row[i + 6], row[i + 7]) for i in range(3, len(row) - 7, 8) if pd.notna(row[i])]
 
-    for event, action_type, pbp_team_id, action_number in events:
+    for event, action_type, sub_type, pbp_team_id, action_number in events:
         if event == 'in':
             in_game = True
             action_start = action_number
         elif event == 'out':
             in_game = False
             action_end = action_number
-            fga_by_opponent += count_fga_between(row['game_id'], action_start, action_end, row['team_id'])
+            efga_by_opponent += count_efga_between(row['game_id'], action_start, action_end, row['team_id'])
         elif in_game and action_type in ['2pt', '3pt'] and pbp_team_id != row['team_id']:
-            fga_by_opponent += 1
+            if action_type == '2pt':
+                efga_by_opponent += 1
+            elif action_type == '3pt':
+                efga_by_opponent += 0.5
 
     if in_game:  # If player is still in the game till the end
         action_end = fetch_last_action_number(row['game_id'])
-        fga_by_opponent += count_fga_between(row['game_id'], action_start, action_end, row['team_id'])
+        efga_by_opponent += count_efga_between(row['game_id'], action_start, action_end, row['team_id'])
 
-    return fga_by_opponent
+    return efga_by_opponent
 
-def count_fga_between(game_id, start_action, end_action, team_id):
+def count_efga_between(game_id, start_action, end_action, team_id):
+    conn = sqlite3.connect(db_path)
+    query = """
+    SELECT SUM(CASE WHEN action_type = '2pt' THEN 1 ELSE 0.5 END) AS efga_sum
+    FROM PlayByPlay
+    WHERE game_id = ? AND action_number BETWEEN ? AND ? AND action_type IN ('2pt', '3pt') AND team_id != ?
+    """
+    efga_sum = pd.read_sql_query(query, conn, params=(game_id, start_action, end_action, team_id)).squeeze()
+    conn.close()
+    return efga_sum if efga_sum is not None else 0
+
+def calculate_offensive_rebounds_by_opponent(row):
+    offensive_rebounds_by_opponent = 0
+    in_game = False
+    action_start = None
+    events = [(row[i], row[i + 4], row[i + 5], row[i + 6], row[i + 7]) for i in range(3, len(row) - 7, 8) if pd.notna(row[i])]
+
+    for event, action_type, sub_type, pbp_team_id, action_number in events:
+        if event == 'in':
+            in_game = True
+            action_start = action_number
+        elif event == 'out':
+            in_game = False
+            action_end = action_number
+            offensive_rebounds_by_opponent += count_offensive_rebounds_between(row['game_id'], action_start, action_end, row['team_id'])
+        elif in_game and action_type == 'rebound' and sub_type == 'offensive' and pbp_team_id != row['team_id']:
+            offensive_rebounds_by_opponent += 1
+
+    if in_game:  # If player is still in the game till the end
+        action_end = fetch_last_action_number(row['game_id'])
+        offensive_rebounds_by_opponent += count_offensive_rebounds_between(row['game_id'], action_start, action_end, row['team_id'])
+
+    return offensive_rebounds_by_opponent
+
+def count_offensive_rebounds_between(game_id, start_action, end_action, team_id):
     conn = sqlite3.connect(db_path)
     query = """
     SELECT COUNT(*)
     FROM PlayByPlay
-    WHERE game_id = ? AND action_number BETWEEN ? AND ? AND action_type IN ('2pt', '3pt') AND team_id != ?
+    WHERE game_id = ? AND action_number BETWEEN ? AND ? AND action_type = 'rebound' AND sub_type = 'offensive' AND team_id != ?
+    """
+    count = pd.read_sql_query(query, conn, params=(game_id, start_action, end_action, team_id)).squeeze()
+    conn.close()
+    return count
+
+def calculate_turnovers_by_opponent(row):
+    turnovers_by_opponent = 0
+    in_game = False
+    action_start = None
+    events = [(row[i], row[i + 4], row[i + 5], row[i + 6], row[i + 7]) for i in range(3, len(row) - 7, 8) if pd.notna(row[i])]
+
+    for event, action_type, sub_type, pbp_team_id, action_number in events:
+        if event == 'in':
+            in_game = True
+            action_start = action_number
+        elif event == 'out':
+            in_game = False
+            action_end = action_number
+            turnovers_by_opponent += count_turnovers_between(row['game_id'], action_start, action_end, row['team_id'])
+        elif in_game and action_type == 'turnover' and pbp_team_id != row['team_id']:
+            turnovers_by_opponent += 1
+
+    if in_game:  # If player is still in the game till the end
+        action_end = fetch_last_action_number(row['game_id'])
+        turnovers_by_opponent += count_turnovers_between(row['game_id'], action_start, action_end, row['team_id'])
+
+    return turnovers_by_opponent
+
+def count_turnovers_between(game_id, start_action, end_action, team_id):
+    conn = sqlite3.connect(db_path)
+    query = """
+    SELECT COUNT(*)
+    FROM PlayByPlay
+    WHERE game_id = ? AND action_number BETWEEN ? AND ? AND action_type = 'turnover' AND team_id != ?
+    """
+    count = pd.read_sql_query(query, conn, params=(game_id, start_action, end_action, team_id)).squeeze()
+    conn.close()
+    return count
+
+def calculate_freethrows_by_opponent(row):
+    freethrows_by_opponent = 0
+    in_game = False
+    action_start = None
+    events = [(row[i], row[i + 4], row[i + 5], row[i + 6], row[i + 7]) for i in range(3, len(row) - 7, 8) if pd.notna(row[i])]
+
+    for event, action_type, sub_type, pbp_team_id, action_number in events:
+        if event == 'in':
+            in_game = True
+            action_start = action_number
+        elif event == 'out':
+            in_game = False
+            action_end = action_number
+            freethrows_by_opponent += count_freethrows_between(row['game_id'], action_start, action_end, row['team_id'])
+        elif in_game and action_type == 'freethrow' and pbp_team_id != row['team_id']:
+            freethrows_by_opponent += 1
+
+    if in_game:  # If player is still in the game till the end
+        action_end = fetch_last_action_number(row['game_id'])
+        freethrows_by_opponent += count_freethrows_between(row['game_id'], action_start, action_end, row['team_id'])
+
+    return freethrows_by_opponent
+
+def count_freethrows_between(game_id, start_action, end_action, team_id):
+    conn = sqlite3.connect(db_path)
+    query = """
+    SELECT COUNT(*)
+    FROM PlayByPlay
+    WHERE game_id = ? AND action_number BETWEEN ? AND ? AND action_type = 'freethrow' AND team_id != ?
     """
     count = pd.read_sql_query(query, conn, params=(game_id, start_action, end_action, team_id)).squeeze()
     conn.close()
@@ -1291,7 +1403,7 @@ def player_game_summary_page():
         st.dataframe(df_games)
         
         st.write(f"### Plus-Minus for {selected_player}")
-        st.dataframe(df_games[['game_id', 'plus_minus_on', 'plus_minus_off', 'final_lead_value', 'points_allowed_on', 'fga_by_opponent']])
+        st.dataframe(df_games[['game_id', 'plus_minus_on', 'plus_minus_off', 'final_lead_value', 'points_allowed_on', 'efga_by_opponent', 'offensive_rebounds_by_opponent', 'turnovers_by_opponent', 'freethrows_by_opponent']])
 
 def get_player_list():
     conn = sqlite3.connect(db_path)

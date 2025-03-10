@@ -1174,6 +1174,8 @@ def fetch_player_games(player_name):
     df_formatted['offensive_rebounds_by_opponent'] = df_formatted.apply(lambda row: calculate_offensive_rebounds_by_opponent(row), axis=1)
     df_formatted['turnovers_by_opponent'] = df_formatted.apply(lambda row: calculate_turnovers_by_opponent(row), axis=1)
     df_formatted['freethrows_by_opponent'] = df_formatted.apply(lambda row: calculate_freethrows_by_opponent(row), axis=1)
+    df_formatted['possessions_by_opponent'] = df_formatted.apply(lambda row: calculate_possessions(row), axis=1)
+    df_formatted['defensive_rating'] = df_formatted.apply(lambda row: calculate_defensive_rating(row), axis=1)
 
     return df_formatted
 
@@ -1375,6 +1377,20 @@ def count_freethrows_between(game_id, start_action, end_action, team_id):
     conn.close()
     return count
 
+def calculate_possessions(row):
+    fga = row['efga_by_opponent'] * 2  # Convert effective FGA back to total FGA
+    orb = row['offensive_rebounds_by_opponent']
+    tov = row['turnovers_by_opponent']
+    fta = row['freethrows_by_opponent']
+    possessions = fga - orb + tov + (0.44 * fta)
+    return possessions
+
+def calculate_defensive_rating(row):
+    if row['possessions_by_opponent'] == 0:
+        return 0
+    defensive_rating = 100 * (row['points_allowed_on'] / row['possessions_by_opponent'])
+    return defensive_rating
+
 def fetch_final_lead_value(game_id, team_id):
     conn = sqlite3.connect(db_path)
     query = """
@@ -1403,7 +1419,7 @@ def player_game_summary_page():
         st.dataframe(df_games)
         
         st.write(f"### Plus-Minus for {selected_player}")
-        st.dataframe(df_games[['game_id', 'plus_minus_on', 'plus_minus_off', 'final_lead_value', 'points_allowed_on', 'efga_by_opponent', 'offensive_rebounds_by_opponent', 'turnovers_by_opponent', 'freethrows_by_opponent']])
+        st.dataframe(df_games[['game_id', 'plus_minus_on', 'plus_minus_off', 'final_lead_value', 'points_allowed_on', 'efga_by_opponent', 'offensive_rebounds_by_opponent', 'turnovers_by_opponent', 'freethrows_by_opponent', 'possessions_by_opponent', 'defensive_rating']])
 
 def get_player_list():
     conn = sqlite3.connect(db_path)

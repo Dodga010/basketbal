@@ -1463,18 +1463,25 @@ def fetch_final_lead_value(game_id, team_id):
 
 def player_game_summary_page():
     st.title("🏀 Player Game Summary")
-    st.write("Select a player to view all games they have played in, whether they were a starter, and their substitutions with lead scores in structured columns. If the player finished the game with a plus-minus score, it will be displayed as well.")
-    
-    player_list = get_player_list()
+    st.write("Select a player to view all games they have played in, whether they were a starter, and their substitutions with lead scores in structured columns. If the player finished the game on the court, the final lead value will be shown.")
+
+    player_list = fetch_players()
     selected_player = st.selectbox("Select Player", player_list)
-    
+    player_game_stats = fetch_player_game_stats(selected_player)
     if selected_player:
         df_games = fetch_player_games(selected_player)
         st.write(f"### Games Played by {selected_player}")
         st.dataframe(df_games)
         
         st.write(f"### Plus-Minus for {selected_player}")
-        st.dataframe(df_games[['game_id', 'plus_minus_on', 'plus_minus_off', 'final_lead_value', 'points_allowed_on', 'efga_by_opponent', 'offensive_rebounds_by_opponent', 'turnovers_by_opponent', 'freethrows_by_opponent', 'possessions_by_opponent', 'defensive_rating', 'minutes_played', 'weight_factor', 'PM_bias']])
+        st.dataframe(df_games[['game_id', 'plus_minus_on', 'plus_minus_off', 'final_lead_value', 'points_allowed_on', 'efga_by_opponent', 'offensive_rebounds_by_opponent', 'turnovers_by_opponent', 'freethrows_by_opponent', 'possessions_by_opponent', 'defensive_rating', 'PM_bias', 'oLEBRON']])
+
+        player_game_stats = fetch_player_game_stats(selected_player)
+        if not player_game_stats.empty:
+            st.write(f"### Boxscore for {selected_player}")
+            st.dataframe(player_game_stats[['Game ID', 'PTS', 'AST', '3PM', '3PA', 'FTA', 'REB']])
+        else:
+            st.warning(f"No game-by-game stats available for {selected_player}.")
 
 
 def get_player_list():

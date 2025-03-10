@@ -1107,7 +1107,9 @@ def fetch_player_games(player_name):
     query = """
     SELECT p.game_id, p.team_id, p.starter, 
            pbp.sub_type AS substitution, 
-           pbp.lead AS lead_value
+           pbp.lead AS lead_value, 
+           pbp.current_score_team1, 
+           pbp.current_score_team2
     FROM Players p
     JOIN PlayByPlay pbp ON pbp.game_id = p.game_id AND pbp.player_id = p.json_player_id AND pbp.team_id = p.team_id
     WHERE p.first_name || ' ' || p.last_name = ? AND pbp.action_type = 'substitution'
@@ -1119,7 +1121,7 @@ def fetch_player_games(player_name):
     player_data = {}
     for _, row in df.iterrows():
         player_key = (row['game_id'], row['team_id'], row['starter'])
-        player_data.setdefault(player_key, []).append((row['substitution'], -row['lead_value'] if row['team_id'] == 2 else row['lead_value']))
+        player_data.setdefault(player_key, []).append((row['substitution'], row['lead_value'], row['current_score_team1'], row['current_score_team2']))
 
     max_subs = max(len(events) for events in player_data.values()) if player_data else 0
 
@@ -1130,35 +1132,42 @@ def fetch_player_games(player_name):
         if key[2] == 1:
             row_data.append('in')
             row_data.append(0)
+            row_data.append(0)
+            row_data.append(0)
 
         for event in events:
             row_data.append(event[0])
             row_data.append(event[1])
+            row_data.append(event[2])
+            row_data.append(event[3])
 
         if events and events[-1][0] == 'in':
             row_data.append('out')
             row_data.append(events[-1][1])
+            row_data.append(events[-1][2])
+            row_data.append(events[-1][3])
 
-        while len(row_data) < 3 + (max_subs + 2) * 2:
+        while len(row_data) < 3 + (max_subs + 2) * 4:
             row_data.append(None)
         formatted_data.append(row_data)
 
     columns = ['game_id', 'team_id', 'starter']
     for i in range(max_subs + 2):
-        columns.extend([f'substitution_{i+1}', f'lead_value_{i+1}'])
+        columns.extend([f'substitution_{i+1}', f'lead_value_{i+1}', f'current_score_team1_{i+1}', f'current_score_team2_{i+1}'])
 
     df_formatted = pd.DataFrame(formatted_data, columns=columns)
 
     df_formatted['plus_minus_on'] = df_formatted.apply(lambda row: calculate_plus_minus(row, on_court=True), axis=1)
     df_formatted['final_lead_value'] = df_formatted.apply(lambda row: fetch_final_lead_value(row['game_id'], row['team_id']), axis=1)
     df_formatted['plus_minus_off'] = df_formatted['final_lead_value'] - df_formatted['plus_minus_on']
+    df_formatted['points_allowed_on'] = df_formatted.apply(lambda row: calculate_points_allowed(row), axis=1)
 
     return df_formatted
 
 def calculate_plus_minus(row, on_court=True):
     plus_minus = 0
     in_game_lead = None
-    events = [(row[i], row[i + 1]) for i in range(3, len(row) - 1, 2) if pd.notna(row[i])]
+    events = [(row[i], row[i + 1]) for i in range(3, len(row) - 1, 4) if pd.notna(row[i])]
 
     if on_court:
         for event, lead in events:
@@ -1170,9 +1179,39 @@ def calculate_plus_minus(row, on_court=True):
 
     return plus_minus
 
+def calculate_points_allowed(row):
+    points_allowed = 0
+    in_game_score = None
+    events = [(row[i], row[i + 1], row[i + 2], row[i + 3]) for i in range(3, len(row) - 3, 4) if pd.notna(row[i])]
+
+    for event, lead, score1, score2 in events:
+        if event == 'in':
+            in_game_score = score1 if row['team_id'] == 2 else score2
+        elif event == 'out' and in_game_score is not None:
+            current_score = score1 if row['team_id'] == 2 else score2
+            points_allowed += current_score - in_game_score
+            in_game_score = None
+
+    return points_allowed
+
+def fetch_final_lead_value(game_id, team_id):
+    conn = sqlite3.connect(db_path)
+    query = """
+    SELECT lead
+    FROM PlayByPlay
+    WHERE game_id = ?
+    ORDER BY action_number DESC
+    LIMIT 1;
+    """
+    final_lead_value = pd.read_sql_query(query, conn, params=(game_id,)).squeeze()
+    conn.close()
+    if team_id == 2:
+        final_lead_value = -final_lead_value
+    return final_lead_value
+
 def player_game_summary_page():
     st.title("🏀 Player Game Summary")
-    st.write("Select a player to view all games they have played in, whether they were a starter, and their substitutions with lead scores in structured columns. If the player finished the game on the court, the last lead score is recorded.")
+    st.write("Select a player to view all games they have played in, whether they were a starter, and their substitutions with lead scores in structured columns. If the player finished the game with a plus-minus score, it will be displayed as well.")
     
     player_list = get_player_list()
     selected_player = st.selectbox("Select Player", player_list)
@@ -1183,7 +1222,7 @@ def player_game_summary_page():
         st.dataframe(df_games)
         
         st.write(f"### Plus-Minus for {selected_player}")
-        st.dataframe(df_games[['game_id', 'plus_minus_on', 'plus_minus_off', 'final_lead_value']])
+        st.dataframe(df_games[['game_id', 'plus_minus_on', 'plus_minus_off', 'final_lead_value', 'points_allowed_on']])
 
 def get_player_list():
     conn = sqlite3.connect(db_path)
@@ -1191,7 +1230,6 @@ def get_player_list():
     player_list = pd.read_sql(query, conn)["player_name"].tolist()
     conn.close()
     return player_list
-
 
 def load_substitutions(game_id, team_id):
     """Fetch all substitutions for a given game and team, including lead values."""

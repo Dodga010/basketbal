@@ -1538,40 +1538,80 @@ def calculate_all_players_lebron():
     
     return df_stats
 
+def fetch_team_players(team_name):
+    """Fetch all players from a specific team."""
+    conn = sqlite3.connect(db_path)
+    query = """
+    SELECT DISTINCT first_name || ' ' || last_name AS player_name
+    FROM Players p
+    JOIN Teams t ON p.game_id = t.game_id AND p.team_id = t.tm
+    WHERE t.name = ?
+    """
+    players = pd.read_sql_query(query, conn, params=(team_name,))["player_name"].tolist()
+    conn.close()
+    return players
+
 def player_game_summary_page():
     st.title("🏀 Player Game Summary")
     
-    # Get the list of players
+    # Helper function for converting minutes
+    def convert_minutes(time_str):
+        if pd.isna(time_str):
+            return 0
+        if isinstance(time_str, str) and ':' in time_str:
+            minutes, seconds = map(int, time_str.split(':'))
+            return minutes + seconds/60
+        return float(time_str)
+    
+    # Get lists of players and teams
     player_list = get_player_list()
+    team_list = fetch_teams()
     
     # Create columns for layout
     col1, col2 = st.columns([1, 3])
     
     with col1:
         st.write("### Select Players")
-        # Use multiselect for more compact player selection
-        selected_players = st.multiselect(
-            "Choose players to compare:",
-            options=player_list,
-            default=[player_list[0]] if player_list else None  # Select first player by default
-        )
+        
+        # Add radio buttons for selection type
+        selection_type = st.radio("Select by:", ["Individual Players", "Team Players"])
+        
+        selected_players = []
+        if selection_type == "Individual Players":
+            # Use multiselect for individual player selection
+            selected_players = st.multiselect(
+                "Choose players to compare:",
+                options=player_list,
+                default=[player_list[0]] if player_list else None
+            )
+        else:  # Team Players
+            # Select team to load its players
+            selected_team = st.selectbox(
+                "Choose team:",
+                options=team_list,
+                index=0 if team_list else None
+            )
+            
+            if selected_team:
+                # Get all players from the selected team
+                team_players = fetch_team_players(selected_team)
+                if team_players:
+                    st.write(f"#### Players from {selected_team}:")
+                    selected_players = st.multiselect(
+                        "Select players to compare:",
+                        options=team_players,
+                        default=team_players  # By default select all team players
+                    )
+                else:
+                    st.warning(f"No players found for {selected_team}")
     
     if selected_players:
-        # Container for all selected players' stats
+        # Container for all selected stats
         all_stats = []
         
-        # Fetch and calculate stats for each selected player
+        # Fetch and calculate stats for selected players
         for player in selected_players:
             df_games = fetch_player_games(player)
-            
-            # Convert minutes to numeric
-            def convert_minutes(time_str):
-                if pd.isna(time_str):
-                    return 0
-                if isinstance(time_str, str) and ':' in time_str:
-                    minutes, seconds = map(int, time_str.split(':'))
-                    return minutes + seconds/60
-                return float(time_str)
             
             df_games['minutes_numeric'] = df_games['minutes_played'].apply(convert_minutes)
             total_minutes = df_games['minutes_numeric'].sum()
@@ -1587,13 +1627,14 @@ def player_game_summary_page():
             # Add to stats collection
             all_stats.append({
                 'Player': player,
-                'Total Minutes': total_minutes,
+                'Team': selected_team if selection_type == "Team Players" else "Various",
+                'Minutes': total_minutes,
                 'oLEBRON': weighted_oLEBRON,
                 'dLEBRON': weighted_dLEBRON,
                 'Total LEBRON': weighted_LEBRON_total
             })
         
-        # Create DataFrame with all selected players' stats
+        # Create DataFrame with all selected stats
         df_stats = pd.DataFrame(all_stats)
         
         with col2:
@@ -1619,7 +1660,10 @@ def player_game_summary_page():
             # Labels and title
             ax.set_xlabel('Defensive LEBRON (dLEBRON)')
             ax.set_ylabel('Offensive LEBRON (oLEBRON)')
-            ax.set_title('Player Comparison: Offensive vs Defensive LEBRON')
+            title = f"Player Comparison: Offensive vs Defensive LEBRON"
+            if selection_type == "Team Players":
+                title += f"\n{selected_team} Players"
+            ax.set_title(title)
             
             # Add grid
             ax.grid(True, alpha=0.3)
@@ -1629,27 +1673,20 @@ def player_game_summary_page():
             
             # Show stats table
             st.write("### Selected Players' Statistics")
-            st.dataframe(df_stats.round(3).set_index('Player'))
+            display_df = df_stats.round(3).set_index('Player')
+            st.dataframe(display_df)
             
-            # Add quadrant analysis
-            st.write("### Player Analysis")
-            mean_o = df_stats['oLEBRON'].mean()
-            mean_d = df_stats['dLEBRON'].mean()
-            
-            for _, player in df_stats.iterrows():
-                analysis = ""
-                if player['oLEBRON'] > mean_o and player['dLEBRON'] > mean_d:
-                    analysis = "Two-way player (above average on both ends)"
-                elif player['oLEBRON'] > mean_o:
-                    analysis = "Offensive specialist (above average on offense)"
-                elif player['dLEBRON'] > mean_d:
-                    analysis = "Defensive specialist (above average on defense)"
-                else:
-                    analysis = "Below average on both ends"
-                
-                st.write(f"**{player['Player']}**: {analysis}")
+            # Add analysis for team players
+            if selection_type == "Team Players":
+                st.write(f"### {selected_team} Team Analysis")
+                team_avg_o = df_stats['oLEBRON'].mean()
+                team_avg_d = df_stats['dLEBRON'].mean()
+                st.write(f"Team Average oLEBRON: {team_avg_o:.2f}")
+                st.write(f"Team Average dLEBRON: {team_avg_d:.2f}")
+                st.write(f"Team Average Total LEBRON: {((team_avg_o + team_avg_d)/2):.2f}")
     else:
-        st.write("Please select players to compare from the dropdown menu.")
+        st.write("Please select players to compare.")
+
         
 def get_player_list():
     conn = sqlite3.connect(db_path)

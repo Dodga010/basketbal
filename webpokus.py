@@ -1094,7 +1094,6 @@ import os
 
 db_path = os.path.join(os.path.dirname(__file__), "database.db")
 
-
 def fetch_player_games(player_name):
     conn = sqlite3.connect(db_path)
     query = """
@@ -1113,7 +1112,10 @@ def fetch_player_games(player_name):
            p.three_pointers_made AS threePM,
            p.three_pointers_attempted AS threePA,
            p.free_throws_attempted AS FTA,
-           p.rebounds_offensive AS ORB
+           p.rebounds_offensive AS ORB,
+           p.steals AS STL,
+           p.blocks AS BLK,
+           p.rebounds_defensive AS DREB
     FROM Players p
     JOIN PlayByPlay pbp ON pbp.game_id = p.game_id AND pbp.player_id = p.json_player_id AND pbp.team_id = p.team_id
     WHERE p.first_name || ' ' || p.last_name = ?
@@ -1125,15 +1127,15 @@ def fetch_player_games(player_name):
 
     player_data = {}
     for _, row in df.iterrows():
-        player_key = (row['game_id'], row['team_id'], row['starter'], row['minutes_played'])
+        player_key = (row['game_id'], row['team_id'], row['starter'], row['minutes_played'], row['PTS'], row['AST'], row['threePM'], row['threePA'], row['FTA'], row['ORB'], row['STL'], row['BLK'], row['DREB'])
         player_data.setdefault(player_key, []).append((row['substitution'], row['lead_value'], row['current_score_team1'], row['current_score_team2'], row['action_type'], row['sub_type'], row['pbp_team_id'], row['action_number']))
 
     max_subs = max(len(events) for events in player_data.values()) if player_data else 0
 
     formatted_data = []
     for key, events in player_data.items():
-        row_data = list(key[:3])  # exclude minutes_played from key
-        minutes_played = key[3]
+        row_data = list(key[:3])  # exclude minutes_played and other stats from key
+        minutes_played, PTS, AST, threePM, threePA, FTA, ORB, STL, BLK, DREB = key[3:]
 
         if isinstance(minutes_played, str) and ':' in minutes_played:
             mm, ss = map(int, minutes_played.split(':'))
@@ -1169,7 +1171,7 @@ def fetch_player_games(player_name):
 
         while len(row_data) < 3 + (max_subs + 2) * 8:
             row_data.append(None)
-        row_data.append(minutes_played)  # Adding minutes_played at the end
+        row_data.extend([minutes_played, PTS, AST, threePM, threePA, FTA, ORB, STL, BLK, DREB])  # Adding minutes_played and other stats
 
         # Calculate weight factor
         weight_factor = 100 / (minutes_played + 100)
@@ -1180,7 +1182,7 @@ def fetch_player_games(player_name):
     columns = ['game_id', 'team_id', 'starter']
     for i in range(max_subs + 2):
         columns.extend([f'substitution_{i+1}', f'lead_value_{i+1}', f'current_score_team1_{i+1}', f'current_score_team2_{i+1}', f'action_type_{i+1}', f'sub_type_{i+1}', f'pbp_team_id_{i+1}', f'action_number_{i+1}'])
-    columns.extend(['minutes_played', 'weight_factor', 'PTS', 'AST', 'threePM', 'threePA', 'FTA', 'ORB'])  # Adding weight_factor and player stats columns
+    columns.extend(['minutes_played', 'PTS', 'AST', 'threePM', 'threePA', 'FTA', 'ORB', 'STL', 'BLK', 'DREB', 'weight_factor'])  # Adding weight_factor and player stats columns
 
     # Ensure all rows in formatted_data have the same length as columns
     for row in formatted_data:
@@ -1205,9 +1207,16 @@ def fetch_player_games(player_name):
 
     # Calculate PM league average
     pm_league_avg = df_formatted['plus_minus_on'].mean()
-    
+
     # Calculate PM_bias
     df_formatted['PM_bias'] = (df_formatted['plus_minus_on'] + df_formatted['weight_factor'] * pm_league_avg) / (1 + df_formatted['weight_factor'])
+
+    # Update oLEBRON and dLEBRON calculations to use PM_bias
+    df_formatted['oLEBRON'] = (0.80 * df_formatted['PTS']) + (0.75 * df_formatted['AST']) + (0.60 * df_formatted['threePM']) + (0.45 * df_formatted['threePA']) + (0.55 * df_formatted['FTA']) + (0.40 * df_formatted['ORB']) + (0.50 * df_formatted['PM_bias'])
+    df_formatted['dLEBRON'] = (0.85 * df_formatted['STL']) + (0.70 * df_formatted['BLK']) + (0.50 * df_formatted['DREB']) + (0.40 * df_formatted['defensive_rating']) + (0.55 * df_formatted['PM_bias'])
+
+    # Calculate standard LEBRON with equal weights
+    df_formatted['LEBRON_total'] = 0.5 * df_formatted['oLEBRON'] + 0.5 * df_formatted['dLEBRON']
 
     return df_formatted
 
@@ -1445,20 +1454,18 @@ def fetch_final_lead_value(game_id, team_id):
 
 def player_game_summary_page():
     st.title("🏀 Player Game Summary")
-    st.write("Select a player to view all games they have played in, whether they were a starter, and their substitutions with lead scores in structured columns. If the player finished the game with a plus-minus score, it will be displayed as well.")
-    
+    st.write("Select a player to view all games they have played in, whether they were a starter, and their substitutions with lead scores in structured columns. If the player finished the game with a lead, calculate the plus-minus value for the player while on the court and while off the court.")
+
     player_list = get_player_list()
     selected_player = st.selectbox("Select Player", player_list)
-    
+
     if selected_player:
         df_games = fetch_player_games(selected_player)
         st.write(f"### Games Played by {selected_player}")
         st.dataframe(df_games)
-        
+
         st.write(f"### Plus-Minus for {selected_player}")
-        st.dataframe(df_games[['game_id', 'plus_minus_on', 'plus_minus_off', 'final_lead_value', 'points_allowed_on', 'efga_by_opponent', 'offensive_rebounds_by_opponent', 'turnovers_by_opponent', 'freethrows_by_opponent', 'possessions_by_opponent', 'defensive_rating', 'minutes_played', 'weight_factor', 'PM_bias']])
-
-
+        st.dataframe(df_games[['game_id', 'plus_minus_on', 'plus_minus_off', 'final_lead_value', 'points_allowed_on', 'efga_by_opponent', 'offensive_rebounds_by_opponent', 'turnovers_by_opponent', 'freethrows_by_opponent', 'possessions_by_opponent', 'defensive_rating', 'PM_bias', 'oLEBRON', 'dLEBRON', 'LEBRON_total']])
 def get_player_list():
     conn = sqlite3.connect(db_path)
     query = "SELECT DISTINCT first_name || ' ' || last_name AS player_name FROM Players ORDER BY player_name"

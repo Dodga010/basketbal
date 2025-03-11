@@ -1216,7 +1216,7 @@ def fetch_player_games(player_name):
     df_formatted['dLEBRON'] = (0.85 * df_formatted['STL']) + (0.70 * df_formatted['BLK']) + (0.50 * df_formatted['DREB']) + (0.40 * df_formatted['defensive_rating']) + (0.55 * df_formatted['PM_bias'])
 
     # Calculate standard LEBRON with equal weights
-    df_formatted['LEBRON_total'] = 0.5 * df_formatted['oLEBRON'] + 0.5 * df_formatted['dLEBRON']
+    df_formatted['LEBRON_total'] = 0.7 * df_formatted['oLEBRON'] + 0.3 * df_formatted['dLEBRON']
 
     return df_formatted
 
@@ -1446,26 +1446,211 @@ def fetch_final_lead_value(game_id, team_id):
     ORDER BY action_number DESC
     LIMIT 1;
     """
-    final_lead_value = pd.read_sql_query(query, conn, params=(game_id,)).squeeze()
+    cursor = conn.cursor()
+    cursor.execute(query, (game_id,))
+    result = cursor.fetchone()
     conn.close()
+    
+    # Get the lead value from the result tuple and adjust based on team_id
+    final_lead_value = result[0] if result else 0
     if team_id == 2:
         final_lead_value = -final_lead_value
     return final_lead_value
 
+def calculate_weighted_lebron_for_player(player_name, df_games):
+    # Convert minutes_played to numeric if it's in MM:SS format
+    def convert_minutes(time_str):
+        if pd.isna(time_str):
+            return 0
+        if isinstance(time_str, str) and ':' in time_str:
+            minutes, seconds = map(int, time_str.split(':'))
+            return minutes + seconds/60
+        return float(time_str)
+    
+    df_games['minutes_numeric'] = df_games['minutes_played'].apply(convert_minutes)
+    total_minutes = df_games['minutes_numeric'].sum()
+    
+    if total_minutes == 0:
+        return {
+            'Player': player_name,
+            'Weighted oLEBRON': 0,
+            'Weighted dLEBRON': 0,
+            'Weighted Total LEBRON': 0,
+            'Total Minutes': 0
+        }
+    
+    # Calculate weighted averages
+    weighted_oLEBRON = (df_games['oLEBRON'] * df_games['minutes_numeric']).sum() / total_minutes
+    weighted_dLEBRON = (df_games['dLEBRON'] * df_games['minutes_numeric']).sum() / total_minutes
+    weighted_LEBRON_total = (df_games['LEBRON_total'] * df_games['minutes_numeric']).sum() / total_minutes
+    
+    return {
+        'Player': player_name,
+        'Weighted oLEBRON': weighted_oLEBRON,
+        'Weighted dLEBRON': weighted_dLEBRON,
+        'Weighted Total LEBRON': weighted_LEBRON_total,
+        'Total Minutes': total_minutes
+    }
+
+def calculate_all_players_lebron():
+    """Calculate LEBRON stats for all players in a single database query"""
+    conn = sqlite3.connect(db_path)
+    
+    query = """
+    WITH PlayerMinutes AS (
+        SELECT 
+            p.first_name || ' ' || p.last_name AS player_name,
+            p.game_id,
+            p.team_id,
+            CAST(SUBSTR(p.minutes_played, 1, INSTR(p.minutes_played, ':') - 1) AS INTEGER) * 60 + 
+            CAST(SUBSTR(p.minutes_played, INSTR(p.minutes_played, ':') + 1) AS INTEGER) AS minutes_numeric,
+            p.points AS PTS,
+            p.assists AS AST,
+            p.three_pointers_made AS threePM,
+            p.three_pointers_attempted AS threePA,
+            p.free_throws_attempted AS FTA,
+            p.rebounds_offensive AS ORB,
+            p.steals AS STL,
+            p.blocks AS BLK,
+            p.rebounds_defensive AS DREB,
+            p.defensive_rating
+        FROM Players p
+        WHERE p.minutes_played != '0:00'
+    )
+    SELECT 
+        player_name,
+        SUM(minutes_numeric) as total_minutes,
+        SUM(minutes_numeric * ((0.80 * PTS) + (0.75 * AST) + (0.60 * threePM) + 
+            (0.45 * threePA) + (0.55 * FTA) + (0.40 * ORB))) / SUM(minutes_numeric) as weighted_oLEBRON,
+        SUM(minutes_numeric * ((0.85 * STL) + (0.70 * BLK) + (0.50 * DREB) + 
+            (0.40 * defensive_rating))) / SUM(minutes_numeric) as weighted_dLEBRON
+    FROM PlayerMinutes
+    GROUP BY player_name
+    HAVING total_minutes > 0
+    ORDER BY (weighted_oLEBRON + weighted_dLEBRON) DESC
+    """
+    
+    df_stats = pd.read_sql_query(query, conn)
+    conn.close()
+    
+    # Calculate total LEBRON
+    df_stats['weighted_total_LEBRON'] = (df_stats['weighted_oLEBRON'] + df_stats['weighted_dLEBRON']) / 2
+    
+    return df_stats
+
 def player_game_summary_page():
     st.title("🏀 Player Game Summary")
-    st.write("Select a player to view all games they have played in, whether they were a starter, and their substitutions with lead scores in structured columns. If the player finished the game with a lead, calculate the plus-minus value for the player while on the court and while off the court.")
-
+    
+    # Get the list of players
     player_list = get_player_list()
-    selected_player = st.selectbox("Select Player", player_list)
-
-    if selected_player:
-        df_games = fetch_player_games(selected_player)
-        st.write(f"### Games Played by {selected_player}")
-        st.dataframe(df_games)
-
-        st.write(f"### Plus-Minus for {selected_player}")
-        st.dataframe(df_games[['game_id', 'plus_minus_on', 'plus_minus_off', 'final_lead_value', 'points_allowed_on', 'efga_by_opponent', 'offensive_rebounds_by_opponent', 'turnovers_by_opponent', 'freethrows_by_opponent', 'possessions_by_opponent', 'defensive_rating', 'PM_bias', 'oLEBRON', 'dLEBRON', 'LEBRON_total']])
+    
+    # Create columns for layout
+    col1, col2 = st.columns([1, 3])
+    
+    with col1:
+        st.write("### Select Players")
+        # Use multiselect for more compact player selection
+        selected_players = st.multiselect(
+            "Choose players to compare:",
+            options=player_list,
+            default=[player_list[0]] if player_list else None  # Select first player by default
+        )
+    
+    if selected_players:
+        # Container for all selected players' stats
+        all_stats = []
+        
+        # Fetch and calculate stats for each selected player
+        for player in selected_players:
+            df_games = fetch_player_games(player)
+            
+            # Convert minutes to numeric
+            def convert_minutes(time_str):
+                if pd.isna(time_str):
+                    return 0
+                if isinstance(time_str, str) and ':' in time_str:
+                    minutes, seconds = map(int, time_str.split(':'))
+                    return minutes + seconds/60
+                return float(time_str)
+            
+            df_games['minutes_numeric'] = df_games['minutes_played'].apply(convert_minutes)
+            total_minutes = df_games['minutes_numeric'].sum()
+            
+            # Calculate weighted averages
+            if total_minutes > 0:
+                weighted_oLEBRON = (df_games['oLEBRON'] * df_games['minutes_numeric']).sum() / total_minutes
+                weighted_dLEBRON = (df_games['dLEBRON'] * df_games['minutes_numeric']).sum() / total_minutes
+                weighted_LEBRON_total = (df_games['LEBRON_total'] * df_games['minutes_numeric']).sum() / total_minutes
+            else:
+                weighted_oLEBRON = weighted_dLEBRON = weighted_LEBRON_total = 0
+            
+            # Add to stats collection
+            all_stats.append({
+                'Player': player,
+                'Total Minutes': total_minutes,
+                'oLEBRON': weighted_oLEBRON,
+                'dLEBRON': weighted_dLEBRON,
+                'Total LEBRON': weighted_LEBRON_total
+            })
+        
+        # Create DataFrame with all selected players' stats
+        df_stats = pd.DataFrame(all_stats)
+        
+        with col2:
+            # Create scatter plot
+            fig, ax = plt.subplots(figsize=(10, 8))
+            
+            # Plot points
+            scatter = ax.scatter(df_stats['dLEBRON'], 
+                               df_stats['oLEBRON'],
+                               s=100)
+            
+            # Add labels for each point
+            for idx, row in df_stats.iterrows():
+                ax.annotate(row['Player'], 
+                          (row['dLEBRON'], row['oLEBRON']),
+                          xytext=(5, 5), 
+                          textcoords='offset points')
+            
+            # Add quadrant lines
+            ax.axhline(y=df_stats['oLEBRON'].mean(), color='gray', linestyle='--', alpha=0.3)
+            ax.axvline(x=df_stats['dLEBRON'].mean(), color='gray', linestyle='--', alpha=0.3)
+            
+            # Labels and title
+            ax.set_xlabel('Defensive LEBRON (dLEBRON)')
+            ax.set_ylabel('Offensive LEBRON (oLEBRON)')
+            ax.set_title('Player Comparison: Offensive vs Defensive LEBRON')
+            
+            # Add grid
+            ax.grid(True, alpha=0.3)
+            
+            # Show plot
+            st.pyplot(fig)
+            
+            # Show stats table
+            st.write("### Selected Players' Statistics")
+            st.dataframe(df_stats.round(3).set_index('Player'))
+            
+            # Add quadrant analysis
+            st.write("### Player Analysis")
+            mean_o = df_stats['oLEBRON'].mean()
+            mean_d = df_stats['dLEBRON'].mean()
+            
+            for _, player in df_stats.iterrows():
+                analysis = ""
+                if player['oLEBRON'] > mean_o and player['dLEBRON'] > mean_d:
+                    analysis = "Two-way player (above average on both ends)"
+                elif player['oLEBRON'] > mean_o:
+                    analysis = "Offensive specialist (above average on offense)"
+                elif player['dLEBRON'] > mean_d:
+                    analysis = "Defensive specialist (above average on defense)"
+                else:
+                    analysis = "Below average on both ends"
+                
+                st.write(f"**{player['Player']}**: {analysis}")
+    else:
+        st.write("Please select players to compare from the dropdown menu.")
+        
 def get_player_list():
     conn = sqlite3.connect(db_path)
     query = "SELECT DISTINCT first_name || ' ' || last_name AS player_name FROM Players ORDER BY player_name"

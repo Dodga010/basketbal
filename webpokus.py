@@ -1721,6 +1721,123 @@ def display_avg_substitutions_graph():
         ax.grid(axis="y", linestyle="--", alpha=0.7)
         st.pyplot(fig)
 
+def create_match_selector():
+    """Create an enhanced match selection widget with search and filtering capabilities."""
+    st.write("### 🏀 Select Match")
+    
+    # Get matches data with corrected table names
+    conn = sqlite3.connect(db_path)
+    
+    # Query to get match data
+    matches_query = """
+    SELECT DISTINCT 
+        p.game_id,
+        p.period,
+        t1.name as team1_name,
+        t2.name as team2_name,
+        MAX(CASE WHEN t1.tm = 1 THEN t1.points END) as score1,
+        MAX(CASE WHEN t2.tm = 2 THEN t2.points END) as score2
+    FROM PlayByPlay p
+    JOIN Teams t1 ON p.game_id = t1.game_id AND t1.tm = 1
+    JOIN Teams t2 ON p.game_id = t2.game_id AND t2.tm = 2
+    GROUP BY p.game_id
+    ORDER BY p.game_id DESC
+    """
+    
+    try:
+        df_matches = pd.read_sql_query(matches_query, conn)
+        
+        if df_matches.empty:
+            st.warning("No matches found in the database.")
+            conn.close()
+            return None
+            
+        # Add a formatted display string for each match
+        df_matches['display_string'] = (
+            df_matches['team1_name'] + " vs " + 
+            df_matches['team2_name'] + " (" +
+            df_matches['score1'].astype(str) + "-" +
+            df_matches['score2'].astype(str) + ")"
+        )
+        
+        # Create filter columns
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Team filter
+            all_teams = sorted(list(set(
+                list(df_matches['team1_name'].unique()) + 
+                list(df_matches['team2_name'].unique())
+            )))
+            selected_team = st.selectbox(
+                "Filter by Team",
+                ["All Teams"] + all_teams,
+                key="team_filter"
+            )
+        
+        with col2:
+            # Search box
+            search_term = st.text_input(
+                "Search Matches",
+                placeholder="Search by team name...",
+                key="match_search"
+            ).lower()
+        
+        # Apply filters
+        mask = pd.Series(True, index=df_matches.index)
+        
+        # Team filter
+        if selected_team != "All Teams":
+            mask &= (df_matches['team1_name'] == selected_team) | \
+                    (df_matches['team2_name'] == selected_team)
+        
+        # Search filter
+        if search_term:
+            mask &= df_matches['display_string'].str.lower().str.contains(search_term)
+        
+        # Apply all filters
+        filtered_matches = df_matches[mask]
+        
+        if filtered_matches.empty:
+            st.warning("No matches found with the current filters.")
+            conn.close()
+            return None
+        
+        # Create the final dropdown with filtered matches
+        selected_match = st.selectbox(
+            "Select Match",
+            options=filtered_matches['game_id'].tolist(),
+            format_func=lambda x: filtered_matches[filtered_matches['game_id'] == x]['display_string'].iloc[0],
+            key="match_selector"
+        )
+        
+        # Display match details
+        if selected_match:
+            match_data = filtered_matches[filtered_matches['game_id'] == selected_match].iloc[0]
+            
+            # Create an expander for additional match details
+            with st.expander("Match Details", expanded=False):
+                st.write("---")
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.write("**Home Team**")
+                    st.write(f"🏠 {match_data['team1_name']}")
+                    st.write(f"**Score:** {match_data['score1']}")
+                
+                with col2:
+                    st.write("**Away Team**")
+                    st.write(f"🏃 {match_data['team2_name']}")
+                    st.write(f"**Score:** {match_data['score2']}")
+        
+        conn.close()
+        return selected_match
+    
+    except Exception as e:
+        st.error("Error loading matches. Please try again.")
+        conn.close()
+        return None
+    
 def generate_player_performance_comparison(game_id):
     """Generate player performance comparison for the game."""
     st.subheader("🏀 Player Performance Comparison")
@@ -2205,53 +2322,13 @@ def plot_match_shot_chart(game_id):
     st.pyplot(fig)
 
 def display_match_report():
-    st.subheader("🏀 Match Detail Analysis")
-    match_dict = fetch_matches()
-    selected_match_name = st.selectbox("Select a match:", list(match_dict.keys()))
-    selected_match = match_dict[selected_match_name]
+    selected_match = create_match_selector()
     
     if selected_match:
-        # Generate comprehensive match report
         generate_match_report(selected_match)
-        
-        # Add a separator
-        st.markdown("---")
-        
-        # Add an expander for detailed stats
-        with st.expander("View Detailed Statistics"):
-            teams = [1, 2]
-            team_names = []
-            team_stats = []
-            
-            for team in teams:
-                stats = fetch_team_stats(selected_match, team)
-                if not stats.empty:
-                    team_names.append(stats.iloc[0]["name"])
-                    team_stats.append(stats)
-            
-            if len(team_stats) == 2:
-                # Your existing detailed stats display code here
-                combined_stats = pd.concat(team_stats, ignore_index=True)
-                combined_stats = combined_stats.T
-                combined_stats.columns = [team_names[0], team_names[1]]
-                combined_stats = combined_stats.reset_index().rename(columns={"index": "Statistic"})
-                combined_stats = combined_stats.dropna(subset=[team_names[0], team_names[1]], how='all')
-                numeric_cols = combined_stats.columns[1:]
-                combined_stats[numeric_cols] = combined_stats[numeric_cols].apply(pd.to_numeric, errors='coerce')
-                st.dataframe(
-                    combined_stats.style.format(
-                        {team_names[0]: "{:.1f}", team_names[1]: "{:.1f}"}
-                    )
-                )
-        
-        # Add substitutions in an expander
-        with st.expander("View Substitutions"):
-            substitutions = count_substitutions(selected_match)
-            if not substitutions.empty:
-                st.subheader("🔄 Substitutions")
-                substitutions["team_id"] = substitutions["team_id"].map({1: team_names[0], 2: team_names[1]})
-                st.dataframe(substitutions.rename(columns={"team_id": "Team", "substitutions": "Total Substitutions"}))
-    
+    else:
+        st.info("Please select a match to view the report.")
+
 def generate_advanced_metrics(game_id):
     """Generate advanced metrics for the game."""
     st.subheader("📈 Advanced Metrics")

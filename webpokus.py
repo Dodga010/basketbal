@@ -1721,10 +1721,198 @@ def display_avg_substitutions_graph():
         ax.grid(axis="y", linestyle="--", alpha=0.7)
         st.pyplot(fig)
 
+def fetch_match_report_data(game_id):
+    """Fetch comprehensive match report data."""
+    conn = sqlite3.connect(db_path)
+    
+    # Basic match info
+    match_query = """
+    SELECT 
+        t1.name as home_team,
+        t2.name as away_team,
+        (t1.p1_score + t1.p2_score + t1.p3_score + t1.p4_score) as home_score,
+        (t2.p1_score + t2.p2_score + t2.p3_score + t2.p4_score) as away_score,
+        t1.field_goal_percentage as home_fg_pct,
+        t2.field_goal_percentage as away_fg_pct,
+        t1.three_point_percentage as home_3p_pct,
+        t2.three_point_percentage as away_3p_pct,
+        t1.rebounds_total as home_rebounds,
+        t2.rebounds_total as away_rebounds,
+        t1.assists as home_assists,
+        t2.assists as away_assists
+    FROM Teams t1
+    JOIN Teams t2 ON t1.game_id = t2.game_id
+    WHERE t1.game_id = ? AND t1.tm = 1 AND t2.tm = 2;
+    """
+    
+    # Top scorers
+    scorers_query = """
+    SELECT 
+        first_name || ' ' || last_name as player_name,
+        points,
+        minutes_played,
+        field_goals_made || '/' || field_goals_attempted as fg,
+        three_pointers_made || '/' || three_pointers_attempted as three_pt,
+        team_id
+    FROM Players
+    WHERE game_id = ? AND points > 0
+    ORDER BY points DESC
+    LIMIT 6;
+    """
+    
+    # Quarter by quarter
+    quarters_query = """
+    SELECT 
+        tm,
+        p1_score as Q1,
+        p2_score as Q2,
+        p3_score as Q3,
+        p4_score as Q4
+    FROM Teams
+    WHERE game_id = ?
+    ORDER BY tm;
+    """
+    
+    match_data = pd.read_sql_query(match_query, conn, params=(game_id,))
+    scorers_data = pd.read_sql_query(scorers_query, conn, params=(game_id,))
+    quarters_data = pd.read_sql_query(quarters_query, conn, params=(game_id,))
+    
+    conn.close()
+    
+    return match_data, scorers_data, quarters_data
+
+def generate_match_report(game_id):
+    """Generate a comprehensive single-game analysis with detailed statistics."""
+    match_data, scorers_data, quarters_data = fetch_match_report_data(game_id)
+    
+    if match_data.empty:
+        st.error("No match data available.")
+        return
+    
+    # Match header
+    st.title(f"🏀 Match Report: {match_data.iloc[0]['home_team']} vs {match_data.iloc[0]['away_team']}")
+    
+    # Score display
+    col1, col2, col3 = st.columns([2,1,2])
+    with col1:
+        st.subheader(match_data.iloc[0]['home_team'])
+        st.header(f"{int(match_data.iloc[0]['home_score'])}")
+    with col2:
+        st.subheader("VS")
+    with col3:
+        st.subheader(match_data.iloc[0]['away_team'])
+        st.header(f"{int(match_data.iloc[0]['away_score'])}")
+    
+    # Quarter by quarter breakdown
+    st.subheader("📊 Quarter by Quarter")
+    quarter_cols = st.columns(4)
+    for idx, quarter in enumerate(['Q1', 'Q2', 'Q3', 'Q4'], 1):
+        with quarter_cols[idx-1]:
+            st.metric(
+                f"Quarter {idx}",
+                f"{quarters_data.iloc[0][quarter]}-{quarters_data.iloc[1][quarter]}",
+                delta=int(quarters_data.iloc[0][quarter]) - int(quarters_data.iloc[1][quarter])
+            )
+    
+    # Key statistics comparison
+    st.subheader("📈 Key Statistics")
+    stats_cols = st.columns(3)
+    
+    with stats_cols[0]:
+        st.metric(
+            "Field Goal %",
+            f"{match_data.iloc[0]['home_fg_pct']:.1f}% vs {match_data.iloc[0]['away_fg_pct']:.1f}%",
+            delta=f"{float(match_data.iloc[0]['home_fg_pct']) - float(match_data.iloc[0]['away_fg_pct']):.1f}%"
+        )
+    
+    with stats_cols[1]:
+        st.metric(
+            "Three Point %",
+            f"{match_data.iloc[0]['home_3p_pct']:.1f}% vs {match_data.iloc[0]['away_3p_pct']:.1f}%",
+            delta=f"{float(match_data.iloc[0]['home_3p_pct']) - float(match_data.iloc[0]['away_3p_pct']):.1f}%"
+        )
+    
+    with stats_cols[2]:
+        st.metric(
+            "Assists",
+            f"{match_data.iloc[0]['home_assists']} vs {match_data.iloc[0]['away_assists']}",
+            delta=int(match_data.iloc[0]['home_assists']) - int(match_data.iloc[0]['away_assists'])
+        )
+    
+    # Top scorers
+    st.subheader("🏆 Top Performers")
+    
+    # Split scorers by team
+    home_scorers = scorers_data[scorers_data['team_id'] == 1]
+    away_scorers = scorers_data[scorers_data['team_id'] == 2]
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.write(f"**{match_data.iloc[0]['home_team']}**")
+        for _, scorer in home_scorers.iterrows():
+            st.write(f"{scorer['player_name']}: {scorer['points']} pts ({scorer['fg']} FG, {scorer['three_pt']} 3PT)")
+    
+    with col2:
+        st.write(f"**{match_data.iloc[0]['away_team']}**")
+        for _, scorer in away_scorers.iterrows():
+            st.write(f"{scorer['player_name']}: {scorer['points']} pts ({scorer['fg']} FG, {scorer['three_pt']} 3PT)")
+    
+    # Game flow chart
+    st.subheader("📈 Game Flow")
+    plot_score_lead_full_game(game_id)
+
+def display_match_report():
+    st.subheader("🏀 Match Detail Analysis")
+    match_dict = fetch_matches()
+    selected_match_name = st.selectbox("Select a match:", list(match_dict.keys()))
+    selected_match = match_dict[selected_match_name]
+    
+    if selected_match:
+        # Generate comprehensive match report
+        generate_match_report(selected_match)
+        
+        # Add a separator
+        st.markdown("---")
+        
+        # Add an expander for detailed stats
+        with st.expander("View Detailed Statistics"):
+            teams = [1, 2]
+            team_names = []
+            team_stats = []
+            
+            for team in teams:
+                stats = fetch_team_stats(selected_match, team)
+                if not stats.empty:
+                    team_names.append(stats.iloc[0]["name"])
+                    team_stats.append(stats)
+            
+            if len(team_stats) == 2:
+                # Your existing detailed stats display code here
+                combined_stats = pd.concat(team_stats, ignore_index=True)
+                combined_stats = combined_stats.T
+                combined_stats.columns = [team_names[0], team_names[1]]
+                combined_stats = combined_stats.reset_index().rename(columns={"index": "Statistic"})
+                combined_stats = combined_stats.dropna(subset=[team_names[0], team_names[1]], how='all')
+                numeric_cols = combined_stats.columns[1:]
+                combined_stats[numeric_cols] = combined_stats[numeric_cols].apply(pd.to_numeric, errors='coerce')
+                st.dataframe(
+                    combined_stats.style.format(
+                        {team_names[0]: "{:.1f}", team_names[1]: "{:.1f}"}
+                    )
+                )
+        
+        # Add substitutions in an expander
+        with st.expander("View Substitutions"):
+            substitutions = count_substitutions(selected_match)
+            if not substitutions.empty:
+                st.subheader("🔄 Substitutions")
+                substitutions["team_id"] = substitutions["team_id"].map({1: team_names[0], 2: team_names[1]})
+                st.dataframe(substitutions.rename(columns={"team_id": "Team", "substitutions": "Total Substitutions"}))
     
 def main():
     st.title("🏀 Basketball Stats Viewer")
-    page = st.sidebar.selectbox("📌 Choose a page", ["Team Season Boxscore", "Head-to-Head Comparison", "Referee Stats", "Shot Chart", "Four Factors", "Match Detail","Lebron"])
+    page = st.sidebar.selectbox("📌 Choose a page", ["Team Season Boxscore", "Head-to-Head Comparison", "Referee Stats", "Shot Chart","Match report", "Four Factors", "Match Detail","Lebron"])
 
     if page == "Match Detail":
         display_match_detail()
@@ -1800,7 +1988,10 @@ def main():
                 st.dataframe(df_matches)
             else:
                 st.warning(f"No match data available for {team1}.")
-    
+
+    elif page == "Match report":
+        display_match_report()
+
     elif page == "Lebron":
         # Run the function to display the page
         player_game_summary_page()

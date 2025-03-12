@@ -1721,6 +1721,247 @@ def display_avg_substitutions_graph():
         ax.grid(axis="y", linestyle="--", alpha=0.7)
         st.pyplot(fig)
 
+def generate_player_performance_comparison(game_id):
+    """Generate player performance comparison for the game."""
+    st.subheader("🏀 Player Performance Comparison")
+    
+    # Fetch player stats for both teams
+    conn = sqlite3.connect(db_path)
+    query = """
+    SELECT 
+        first_name || ' ' || last_name as player_name,
+        team_id,
+        minutes_played,
+        points,
+        rebounds_total,
+        assists,
+        steals,
+        blocks,
+        turnovers,
+        field_goal_percentage,
+        three_point_percentage
+    FROM Players
+    WHERE game_id = ? AND minutes_played != '0:00'
+    ORDER BY team_id, points DESC
+    """
+    df_players = pd.read_sql_query(query, conn, params=(game_id,))
+    conn.close()
+    
+    if df_players.empty:
+        st.warning("No player data available for this game.")
+        return
+        
+    # Split players by team
+    team1_players = df_players[df_players['team_id'] == 1]
+    team2_players = df_players[df_players['team_id'] == 2]
+    
+    # Display players side by side
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.write("**Team 1**")
+        st.dataframe(team1_players.drop('team_id', axis=1))
+        
+    with col2:
+        st.write("**Team 2**")
+        st.dataframe(team2_players.drop('team_id', axis=1))
+
+def generate_advanced_metrics(game_id):
+    """Generate advanced metrics for the game."""
+    st.subheader("📈 Advanced Metrics")
+    
+    conn = sqlite3.connect(db_path)
+    query = """
+    SELECT 
+        team_id,
+        field_goal_percentage,
+        three_point_percentage,
+        free_throw_percentage,
+        (field_goals_made + 0.5 * three_pointers_made) * 100.0 / field_goals_attempted as efg_percentage,
+        turnovers * 100.0 / (field_goals_attempted + 0.44 * free_throws_attempted) as tov_percentage,
+        rebounds_offensive * 100.0 / (rebounds_offensive + rebounds_defensive) as orb_percentage,
+        free_throws_attempted * 100.0 / field_goals_attempted as ftr_percentage
+    FROM Teams
+    WHERE game_id = ?
+    """
+    df_metrics = pd.read_sql_query(query, conn, params=(game_id,))
+    conn.close()
+    
+    if df_metrics.empty:
+        st.warning("No advanced metrics available for this game.")
+        return
+        
+    # Format metrics for display
+    metrics_cols = st.columns(2)
+    
+    for idx, team in enumerate(['Team 1', 'Team 2'], 1):
+        with metrics_cols[idx-1]:
+            st.write(f"**{team}**")
+            team_metrics = df_metrics[df_metrics['team_id'] == idx].iloc[0]
+            st.metric("Effective FG%", f"{team_metrics['efg_percentage']:.1f}%")
+            st.metric("Turnover Rate", f"{team_metrics['tov_percentage']:.1f}%")
+            st.metric("Offensive Rebound Rate", f"{team_metrics['orb_percentage']:.1f}%")
+            st.metric("Free Throw Rate", f"{team_metrics['ftr_percentage']:.1f}%")
+
+    # Display key moments in a timeline
+    for _, moment in df_moments.iterrows():
+        st.write(f"**Q{moment['period']} - {moment['game_time']}**")
+        st.write(f"Score: {moment['current_score_team1']}-{moment['current_score_team2']}")
+        st.write(f"Action: {moment['action_type']} ({moment['sub_type'] if pd.notna(moment['sub_type']) else ''})")
+        st.write("---")
+
+def generate_game_insights(game_id):
+    """Generate detailed game insights and momentum analysis."""
+    st.subheader("🏀 Game Flow Insights")
+    
+    conn = sqlite3.connect(db_path)
+    
+    # Get scoring runs and momentum shifts
+    runs_query = """
+    WITH ScoringEvents AS (
+        SELECT 
+            period,
+            game_time,
+            action_type,
+            team_id,
+            current_score_team1,
+            current_score_team2,
+            lead,
+            LAG(lead) OVER (ORDER BY period, action_number) as previous_lead
+        FROM PlayByPlay
+        WHERE game_id = ? 
+        AND action_type IN ('2pt', '3pt', 'freethrow')
+        ORDER BY period, action_number
+    )
+    SELECT 
+        period,
+        game_time,
+        team_id,
+        current_score_team1,
+        current_score_team2,
+        lead - COALESCE(previous_lead, 0) as run_size
+    FROM ScoringEvents
+    WHERE ABS(lead - COALESCE(previous_lead, 0)) >= 6
+    ORDER BY period, game_time DESC
+    """
+    
+    # Get critical plays in last 5 minutes
+    critical_plays_query = """
+    SELECT 
+        period,
+        game_time,
+        action_type,
+        sub_type,
+        team_id,
+        current_score_team1,
+        current_score_team2,
+        lead
+    FROM PlayByPlay
+    WHERE game_id = ? 
+    AND period = 4 
+    AND CAST(SUBSTR(game_time, 1, INSTR(game_time, ':') - 1) AS INTEGER) * 60 + 
+        CAST(SUBSTR(game_time, INSTR(game_time, ':') + 1) AS INTEGER) <= 300
+    AND action_type IN ('2pt', '3pt', 'freethrow', 'steal', 'block', 'rebound')
+    ORDER BY game_time DESC
+    """
+    
+    # Simplified lead changes query
+    lead_changes_query = """
+    SELECT COUNT(*) as lead_changes
+    FROM (
+        SELECT 
+            lead,
+            LAG(lead) OVER (ORDER BY period, action_number) as prev_lead
+        FROM PlayByPlay
+        WHERE game_id = ?
+    ) subquery
+    WHERE (lead > 0 AND prev_lead < 0) OR (lead < 0 AND prev_lead > 0)
+    """
+    
+    df_runs = pd.read_sql_query(runs_query, conn, params=(game_id,))
+    df_critical = pd.read_sql_query(critical_plays_query, conn, params=(game_id,))
+    
+    # Get team names
+    teams_query = "SELECT tm, name FROM Teams WHERE game_id = ? ORDER BY tm"
+    df_teams = pd.read_sql_query(teams_query, conn, params=(game_id,))
+    team_names = dict(zip(df_teams['tm'], df_teams['name']))
+    
+    try:
+        lead_changes = pd.read_sql_query(lead_changes_query, conn, params=(game_id,))['lead_changes'].iloc[0]
+    except:
+        lead_changes = 0  # Default value if query fails
+    
+    conn.close()
+    
+    # Display game pace and style
+    if not df_runs.empty:
+        total_runs = len(df_runs)
+        avg_run_size = df_runs['run_size'].abs().mean()
+        st.write("### 🎮 Game Style Analysis")
+        
+        # Analyze game pace
+        if total_runs > 8:
+            st.write("🏃‍♂️ Fast-paced game with multiple scoring runs")
+        elif total_runs > 4:
+            st.write("⚖️ Balanced game with moderate scoring runs")
+        else:
+            st.write("🐢 Defensive battle with few scoring runs")
+            
+        st.metric("Total Significant Runs", total_runs)
+        st.metric("Average Run Size", f"{avg_run_size:.1f} points")
+    
+        # Display scoring runs
+        st.write("### 🔥 Significant Scoring Runs")
+        for _, run in df_runs.iterrows():
+            team_name = team_names.get(run['team_id'], f"Team {run['team_id']}")
+            st.write(f"**Q{run['period']} - {run['game_time']}** | {team_name}")
+            st.write(f"Score: {run['current_score_team1']}-{run['current_score_team2']}")
+            st.write(f"Run of {abs(run['run_size'])} points")
+            st.write("---")
+    
+    # Display critical plays with improved layout
+    if not df_critical.empty:
+        st.write("### ⭐ Critical Plays (Last 5 Minutes)")
+        
+        # Create 3 columns for each play entry
+        for _, play in df_critical.iterrows():
+            col1, col2, col3 = st.columns([1, 2, 1])
+            
+            team_name = team_names.get(play['team_id'], f"Team {play['team_id']}")
+            play_type = play['action_type']
+            if pd.notnull(play['sub_type']):
+                play_type += f" ({play['sub_type']})"
+            
+            with col1:
+                st.write(f"**{play['game_time']}**")
+            
+            with col2:
+                st.write(f"{team_name} | {play_type.upper()}")
+            
+            with col3:
+                score_text = f"{play['current_score_team1']}-{play['current_score_team2']}"
+                if abs(play['lead']) <= 5:
+                    st.write(f"🔥 {score_text}")
+                else:
+                    st.write(score_text)
+            
+            # Add a small divider
+            st.markdown("<hr style='margin: 5px 0px'>", unsafe_allow_html=True)
+    
+    # Display game flow summary
+    st.write("### 📊 Game Flow Summary")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("Lead Changes", lead_changes)
+    with col2:
+        if lead_changes > 10:
+            st.write("🎢 Back-and-forth battle!")
+        elif lead_changes > 5:
+            st.write("⚖️ Competitive game")
+        else:
+            st.write("👑 Dominant performance")
+
+
 def generate_match_report(game_id):
     """Generate a comprehensive single-game analysis with detailed statistics."""
     match_data, scorers_data, quarters_data = fetch_match_report_data(game_id)
@@ -1817,9 +2058,9 @@ def generate_match_report(game_id):
     
     # Advanced Metrics
     generate_advanced_metrics(game_id)
+
+    generate_game_insights(game_id)
     
-    # Key Moments and Highlights
-    generate_key_moments(game_id)
 
 def fetch_match_report_data(game_id):
     """Fetch comprehensive match report data."""
@@ -1978,6 +2219,48 @@ def display_match_report():
                 substitutions["team_id"] = substitutions["team_id"].map({1: team_names[0], 2: team_names[1]})
                 st.dataframe(substitutions.rename(columns={"team_id": "Team", "substitutions": "Total Substitutions"}))
     
+def generate_advanced_metrics(game_id):
+    """Generate advanced metrics for the game."""
+    st.subheader("📈 Advanced Metrics")
+    
+    conn = sqlite3.connect(db_path)
+    query = """
+    SELECT 
+        tm as team_id,
+        name as team_name,
+        field_goal_percentage,
+        three_point_percentage,
+        free_throw_percentage,
+        (field_goals_made + 0.5 * three_pointers_made) * 100.0 / NULLIF(field_goals_attempted, 0) as efg_percentage,
+        turnovers * 100.0 / NULLIF((field_goals_attempted + 0.44 * free_throws_attempted), 0) as tov_percentage,
+        rebounds_offensive * 100.0 / NULLIF((rebounds_offensive + rebounds_defensive), 0) as orb_percentage,
+        free_throws_attempted * 100.0 / NULLIF(field_goals_attempted, 0) as ftr_percentage
+    FROM Teams
+    WHERE game_id = ?
+    ORDER BY tm
+    """
+    df_metrics = pd.read_sql_query(query, conn, params=(game_id,))
+    conn.close()
+    
+    if df_metrics.empty:
+        st.warning("No advanced metrics available for this game.")
+        return
+        
+    # Format metrics for display
+    metrics_cols = st.columns(2)
+    
+    for idx, (_, team_metrics) in enumerate(df_metrics.iterrows()):
+        with metrics_cols[idx]:
+            st.write(f"**{team_metrics['team_name']}**")
+            st.metric("Effective FG%", 
+                     f"{team_metrics['efg_percentage']:.1f}%" if pd.notnull(team_metrics['efg_percentage']) else "N/A")
+            st.metric("Turnover Rate", 
+                     f"{team_metrics['tov_percentage']:.1f}%" if pd.notnull(team_metrics['tov_percentage']) else "N/A")
+            st.metric("Offensive Rebound Rate", 
+                     f"{team_metrics['orb_percentage']:.1f}%" if pd.notnull(team_metrics['orb_percentage']) else "N/A")
+            st.metric("Free Throw Rate", 
+                     f"{team_metrics['ftr_percentage']:.1f}%" if pd.notnull(team_metrics['ftr_percentage']) else "N/A")
+
 def main():
     st.title("🏀 Basketball Stats Viewer")
     page = st.sidebar.selectbox("📌 Choose a page", ["Team Season Boxscore", "Head-to-Head Comparison", "Referee Stats", "Shot Chart","Match report", "Four Factors", "Match Detail","Lebron"])

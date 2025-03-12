@@ -1909,19 +1909,38 @@ def create_and_populate_team_stats():
     conn.close()
 
 def display_team_stats(game_id):
-    """Display team statistics for a selected game."""
+    """Display team statistics from the Teams table for a selected game."""
     try:
-        create_and_populate_team_stats()  # Ensure stats are updated
-        
         conn = sqlite3.connect(db_path)
+        
         stats_query = """
         SELECT 
-            t.name as team_name,
-            ts.*
-        FROM TeamStats ts
-        JOIN Teams t ON ts.game_id = t.game_id AND ts.team_id = t.tm
-        WHERE ts.game_id = ?
-        ORDER BY ts.team_id
+            name,
+            tm,
+            points,
+            field_goals_made as fg,
+            field_goals_attempted as fga,
+            ROUND(CAST(field_goals_made AS FLOAT) / NULLIF(field_goals_attempted, 0) * 100, 1) as fg_percentage,
+            two_pointers_made,
+            two_pointers_attempted,
+            ROUND(CAST(two_pointers_made AS FLOAT) / NULLIF(two_pointers_attempted, 0) * 100, 1) as two_point_percentage,
+            three_pointers_made as threep,
+            three_pointers_attempted as threepa,
+            ROUND(CAST(three_pointers_made AS FLOAT) / NULLIF(three_pointers_attempted, 0) * 100, 1) as three_percentage,
+            free_throws_made as ft,
+            free_throws_attempted as fta,
+            ROUND(CAST(free_throws_made AS FLOAT) / NULLIF(free_throws_attempted, 0) * 100, 1) as ft_percentage,
+            rebounds_offensive as orb,
+            rebounds_defensive as drb,
+            (rebounds_offensive + rebounds_defensive) as total_rebounds,
+            assists as ast,
+            steals as stl,
+            blocks as blk,
+            turnovers as tov,
+            fouls as pf
+        FROM Teams
+        WHERE game_id = ?
+        ORDER BY tm
         """
         
         df_stats = pd.read_sql_query(stats_query, conn, params=(game_id,))
@@ -1933,28 +1952,38 @@ def display_team_stats(game_id):
 
             for idx, team_stats in df_stats.iterrows():
                 with col1 if idx == 0 else col2:
-                    st.write(f"### {team_stats['team_name']}")
+                    st.write(f"### {team_stats['name']}")
                     
                     # Shooting Stats
                     st.write("🎯 **Shooting**")
-                    st.write(f"Field Goals: {team_stats['field_goals_made']}/{team_stats['field_goals_attempted']} ({team_stats['field_goal_percentage']}%)")
-                    st.write(f"3-Pointers: {team_stats['three_pointers_made']}/{team_stats['three_pointers_attempted']} ({team_stats['three_point_percentage']}%)")
-                    st.write(f"Free Throws: {team_stats['free_throws_made']}/{team_stats['free_throws_attempted']} ({team_stats['free_throw_percentage']}%)")
+                    st.write(f"Total Field Goals: {team_stats['fg']}/{team_stats['fga']} ({team_stats['fg_percentage']}%)")
+                    st.write(f"2-Pointers: {team_stats['two_pointers_made']}/{team_stats['two_pointers_attempted']} ({team_stats['two_point_percentage']}%)")
+                    st.write(f"3-Pointers: {team_stats['threep']}/{team_stats['threepa']} ({team_stats['three_percentage']}%)")
+                    st.write(f"Free Throws: {team_stats['ft']}/{team_stats['fta']} ({team_stats['ft_percentage']}%)")
+                    
+                    # Points Breakdown
+                    st.write("🏀 **Points Breakdown**")
+                    two_points = 2 * team_stats['two_pointers_made']
+                    three_points = 3 * team_stats['threep']
+                    free_throw_points = team_stats['ft']
+                    st.write(f"2-Point Points: {two_points}")
+                    st.write(f"3-Point Points: {three_points}")
+                    st.write(f"Free Throw Points: {free_throw_points}")
+                    st.write(f"Total Points: {team_stats['points']}")
                     
                     # Rebounds
                     st.write("🏀 **Rebounds**")
-                    st.write(f"Total: {team_stats['rebounds_total']}")
-                    st.write(f"Offensive: {team_stats['rebounds_offensive']}")
-                    st.write(f"Defensive: {team_stats['rebounds_defensive']}")
+                    st.write(f"Total: {team_stats['total_rebounds']}")
+                    st.write(f"Offensive: {team_stats['orb']}")
+                    st.write(f"Defensive: {team_stats['drb']}")
                     
                     # Other Stats
                     st.write("⚡ **Other Stats**")
-                    st.write(f"Points: {team_stats['points']}")
-                    st.write(f"Assists: {team_stats['assists']}")
-                    st.write(f"Steals: {team_stats['steals']}")
-                    st.write(f"Blocks: {team_stats['blocks']}")
-                    st.write(f"Turnovers: {team_stats['turnovers']}")
-                    st.write(f"Fouls: {team_stats['fouls']}")
+                    st.write(f"Assists: {team_stats['ast']}")
+                    st.write(f"Steals: {team_stats['stl']}")
+                    st.write(f"Blocks: {team_stats['blk']}")
+                    st.write(f"Turnovers: {team_stats['tov']}")
+                    st.write(f"Fouls: {team_stats['pf']}")
 
     except Exception as e:
         st.error(f"Error displaying team statistics: {str(e)}")

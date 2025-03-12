@@ -1838,6 +1838,127 @@ def create_match_selector():
         conn.close()
         return None
     
+def create_and_populate_team_stats():
+    """Create TeamStats table and populate it with data from PlayByPlay"""
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+
+    # Create the TeamStats table
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS TeamStats (
+        game_id INTEGER,
+        team_id INTEGER,
+        field_goals_made INTEGER,
+        field_goals_attempted INTEGER,
+        field_goal_percentage REAL,
+        three_pointers_made INTEGER,
+        three_pointers_attempted INTEGER,
+        three_point_percentage REAL,
+        free_throws_made INTEGER,
+        free_throws_attempted INTEGER,
+        free_throw_percentage REAL,
+        rebounds_offensive INTEGER,
+        rebounds_defensive INTEGER,
+        rebounds_total INTEGER,
+        assists INTEGER,
+        steals INTEGER,
+        blocks INTEGER,
+        turnovers INTEGER,
+        fouls INTEGER,
+        points INTEGER,
+        PRIMARY KEY (game_id, team_id)
+    )""")
+
+    # Populate with data
+    cursor.execute("""
+    INSERT OR REPLACE INTO TeamStats
+    SELECT 
+        game_id,
+        team_id,
+        SUM(CASE WHEN (action_type = '2pt' OR action_type = '3pt') AND sub_type = 'made' THEN 1 ELSE 0 END),
+        SUM(CASE WHEN action_type = '2pt' OR action_type = '3pt' THEN 1 ELSE 0 END),
+        ROUND(CAST(SUM(CASE WHEN (action_type = '2pt' OR action_type = '3pt') AND sub_type = 'made' THEN 1 ELSE 0 END) AS FLOAT) / 
+              NULLIF(SUM(CASE WHEN action_type = '2pt' OR action_type = '3pt' THEN 1 ELSE 0 END), 0) * 100, 1),
+        SUM(CASE WHEN action_type = '3pt' AND sub_type = 'made' THEN 1 ELSE 0 END),
+        SUM(CASE WHEN action_type = '3pt' THEN 1 ELSE 0 END),
+        ROUND(CAST(SUM(CASE WHEN action_type = '3pt' AND sub_type = 'made' THEN 1 ELSE 0 END) AS FLOAT) / 
+              NULLIF(SUM(CASE WHEN action_type = '3pt' THEN 1 ELSE 0 END), 0) * 100, 1),
+        SUM(CASE WHEN action_type = 'freethrow' AND sub_type = 'made' THEN 1 ELSE 0 END),
+        SUM(CASE WHEN action_type = 'freethrow' THEN 1 ELSE 0 END),
+        ROUND(CAST(SUM(CASE WHEN action_type = 'freethrow' AND sub_type = 'made' THEN 1 ELSE 0 END) AS FLOAT) / 
+              NULLIF(SUM(CASE WHEN action_type = 'freethrow' THEN 1 ELSE 0 END), 0) * 100, 1),
+        SUM(CASE WHEN action_type = 'rebound' AND sub_type = 'offensive' THEN 1 ELSE 0 END),
+        SUM(CASE WHEN action_type = 'rebound' AND sub_type = 'defensive' THEN 1 ELSE 0 END),
+        SUM(CASE WHEN action_type = 'rebound' THEN 1 ELSE 0 END),
+        SUM(CASE WHEN action_type = 'assist' THEN 1 ELSE 0 END),
+        SUM(CASE WHEN action_type = 'steal' THEN 1 ELSE 0 END),
+        SUM(CASE WHEN action_type = 'block' THEN 1 ELSE 0 END),
+        SUM(CASE WHEN action_type = 'turnover' THEN 1 ELSE 0 END),
+        SUM(CASE WHEN action_type = 'foul' THEN 1 ELSE 0 END),
+        SUM(CASE 
+            WHEN action_type = '2pt' AND sub_type = 'made' THEN 2
+            WHEN action_type = '3pt' AND sub_type = 'made' THEN 3
+            WHEN action_type = 'freethrow' AND sub_type = 'made' THEN 1
+            ELSE 0 
+        END)
+    FROM PlayByPlay
+    GROUP BY game_id, team_id
+    """)
+
+    conn.commit()
+    conn.close()
+
+def display_team_stats(game_id):
+    """Display team statistics for a selected game."""
+    try:
+        create_and_populate_team_stats()  # Ensure stats are updated
+        
+        conn = sqlite3.connect(db_path)
+        stats_query = """
+        SELECT 
+            t.name as team_name,
+            ts.*
+        FROM TeamStats ts
+        JOIN Teams t ON ts.game_id = t.game_id AND ts.team_id = t.tm
+        WHERE ts.game_id = ?
+        ORDER BY ts.team_id
+        """
+        
+        df_stats = pd.read_sql_query(stats_query, conn, params=(game_id,))
+        conn.close()
+
+        if not df_stats.empty:
+            st.write("### 📊 Team Statistics")
+            col1, col2 = st.columns(2)
+
+            for idx, team_stats in df_stats.iterrows():
+                with col1 if idx == 0 else col2:
+                    st.write(f"### {team_stats['team_name']}")
+                    
+                    # Shooting Stats
+                    st.write("🎯 **Shooting**")
+                    st.write(f"Field Goals: {team_stats['field_goals_made']}/{team_stats['field_goals_attempted']} ({team_stats['field_goal_percentage']}%)")
+                    st.write(f"3-Pointers: {team_stats['three_pointers_made']}/{team_stats['three_pointers_attempted']} ({team_stats['three_point_percentage']}%)")
+                    st.write(f"Free Throws: {team_stats['free_throws_made']}/{team_stats['free_throws_attempted']} ({team_stats['free_throw_percentage']}%)")
+                    
+                    # Rebounds
+                    st.write("🏀 **Rebounds**")
+                    st.write(f"Total: {team_stats['rebounds_total']}")
+                    st.write(f"Offensive: {team_stats['rebounds_offensive']}")
+                    st.write(f"Defensive: {team_stats['rebounds_defensive']}")
+                    
+                    # Other Stats
+                    st.write("⚡ **Other Stats**")
+                    st.write(f"Points: {team_stats['points']}")
+                    st.write(f"Assists: {team_stats['assists']}")
+                    st.write(f"Steals: {team_stats['steals']}")
+                    st.write(f"Blocks: {team_stats['blocks']}")
+                    st.write(f"Turnovers: {team_stats['turnovers']}")
+                    st.write(f"Fouls: {team_stats['fouls']}")
+
+    except Exception as e:
+        st.error(f"Error displaying team statistics: {str(e)}")
+
 def generate_player_performance_comparison(game_id):
     """Generate player performance comparison for the game."""
     st.subheader("🏀 Player Performance Comparison")
@@ -2209,8 +2330,9 @@ def generate_match_report(game_id):
     # Advanced Metrics
     generate_advanced_metrics(game_id)
 
-   
-    
+   # Add this line to display team stats
+    display_team_stats(game_id)
+        
 
 def fetch_match_report_data(game_id):
     """Fetch comprehensive match report data."""

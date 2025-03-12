@@ -1845,7 +1845,7 @@ def generate_game_insights(game_id):
     ORDER BY period, game_time DESC
     """
     
-    # Get critical plays in last 5 minutes
+    # Get critical plays with importance classification
     critical_plays_query = """
     SELECT 
         period,
@@ -1855,75 +1855,110 @@ def generate_game_insights(game_id):
         team_id,
         current_score_team1,
         current_score_team2,
-        lead
+        lead,
+        CASE 
+            WHEN ABS(lead) <= 5 AND period = 4 AND 
+                CAST(SUBSTR(game_time, 1, INSTR(game_time, ':') - 1) AS INTEGER) * 60 + 
+                CAST(SUBSTR(game_time, INSTR(game_time, ':') + 1) AS INTEGER) <= 120 THEN 'Clutch Time'
+            WHEN action_type = '3pt' AND ABS(lead) <= 8 THEN 'Momentum Changer'
+            WHEN action_type IN ('block', 'steal') AND ABS(lead) <= 10 THEN 'Big Defense'
+            WHEN action_type IN ('2pt', '3pt') AND period = 4 AND ABS(lead) <= 10 THEN 'Key Basket'
+            ELSE 'Normal'
+        END as play_importance
     FROM PlayByPlay
     WHERE game_id = ? 
-    AND period = 4 
-    AND CAST(SUBSTR(game_time, 1, INSTR(game_time, ':') - 1) AS INTEGER) * 60 + 
-        CAST(SUBSTR(game_time, INSTR(game_time, ':') + 1) AS INTEGER) <= 300
-    AND action_type IN ('2pt', '3pt', 'freethrow', 'steal', 'block', 'rebound')
-    ORDER BY game_time DESC
+    AND (
+        -- Clutch time plays in close game
+        (period = 4 
+         AND CAST(SUBSTR(game_time, 1, INSTR(game_time, ':') - 1) AS INTEGER) * 60 + 
+             CAST(SUBSTR(game_time, INSTR(game_time, ':') + 1) AS INTEGER) <= 120
+         AND ABS(lead) <= 5
+        )
+        OR
+        -- Big shots that change momentum
+        (action_type = '3pt' AND ABS(lead) <= 8)
+        OR
+        -- Critical defensive plays
+        (action_type IN ('block', 'steal') AND ABS(lead) <= 10)
+        OR
+        -- Important baskets in 4th quarter
+        (action_type IN ('2pt', '3pt') AND period = 4 AND ABS(lead) <= 10)
+    )
+    ORDER BY period DESC, game_time DESC
     """
-    
-    # Simplified lead changes query
-    lead_changes_query = """
-    SELECT COUNT(*) as lead_changes
-    FROM (
-        SELECT 
-            lead,
-            LAG(lead) OVER (ORDER BY period, action_number) as prev_lead
-        FROM PlayByPlay
-        WHERE game_id = ?
-    ) subquery
-    WHERE (lead > 0 AND prev_lead < 0) OR (lead < 0 AND prev_lead > 0)
-    """
-    
-    df_runs = pd.read_sql_query(runs_query, conn, params=(game_id,))
-    df_critical = pd.read_sql_query(critical_plays_query, conn, params=(game_id,))
     
     # Get team names
     teams_query = "SELECT tm, name FROM Teams WHERE game_id = ? ORDER BY tm"
-    df_teams = pd.read_sql_query(teams_query, conn, params=(game_id,))
-    team_names = dict(zip(df_teams['tm'], df_teams['name']))
     
-    try:
-        lead_changes = pd.read_sql_query(lead_changes_query, conn, params=(game_id,))['lead_changes'].iloc[0]
-    except:
-        lead_changes = 0  # Default value if query fails
+    # Execute queries
+    df_runs = pd.read_sql_query(runs_query, conn, params=(game_id,))
+    df_critical = pd.read_sql_query(critical_plays_query, conn, params=(game_id,))
+    df_teams = pd.read_sql_query(teams_query, conn, params=(game_id,))
+    
+    # Create team names dictionary
+    team_names = dict(zip(df_teams['tm'], df_teams['name']))
     
     conn.close()
     
-    # Display game pace and style
+    # Display game summary
     if not df_runs.empty:
+        st.write("### 📊 Game Summary")
+        
         total_runs = len(df_runs)
         avg_run_size = df_runs['run_size'].abs().mean()
-        st.write("### 🎮 Game Style Analysis")
         
-        # Analyze game pace
-        if total_runs > 8:
-            st.write("🏃‍♂️ Fast-paced game with multiple scoring runs")
-        elif total_runs > 4:
-            st.write("⚖️ Balanced game with moderate scoring runs")
-        else:
-            st.write("🐢 Defensive battle with few scoring runs")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric("Scoring Runs", total_runs)
+        with col2:
+            st.metric("Avg Run Size", f"{avg_run_size:.1f}")
+        with col3:
+            if total_runs > 8:
+                st.write("🏃‍♂️ High-paced game!")
+            elif total_runs > 4:
+                st.write("⚖️ Balanced pace")
+            else:
+                st.write("🐢 Defensive battle")
+    
+    # Display biggest runs
+    if not df_runs.empty:
+        st.write("### 🔥 Biggest Runs")
+        
+        # Sort runs by size and take top 3
+        biggest_runs = df_runs.nlargest(3, 'run_size', key=abs)
+        
+        for _, run in biggest_runs.iterrows():
+            col1, col2 = st.columns([2, 3])
             
-        st.metric("Total Significant Runs", total_runs)
-        st.metric("Average Run Size", f"{avg_run_size:.1f} points")
+            with col1:
+                team_name = team_names.get(run['team_id'], f"Team {run['team_id']}")
+                st.write(f"**Q{run['period']} - {run['game_time']}**")
+                st.write(f"**{team_name}**")
+            
+            with col2:
+                st.write(f"Score: {run['current_score_team1']}-{run['current_score_team2']}")
+                run_size = abs(run['run_size'])
+                if run_size >= 10:
+                    st.write(f"🌟 {run_size}-0 Run!")
+                else:
+                    st.write(f"✨ {run_size}-0 Run")
+            
+            st.markdown("<hr style='margin: 5px 0px'>", unsafe_allow_html=True)
     
-        # Display scoring runs
-        st.write("### 🔥 Significant Scoring Runs")
-        for _, run in df_runs.iterrows():
-            team_name = team_names.get(run['team_id'], f"Team {run['team_id']}")
-            st.write(f"**Q{run['period']} - {run['game_time']}** | {team_name}")
-            st.write(f"Score: {run['current_score_team1']}-{run['current_score_team2']}")
-            st.write(f"Run of {abs(run['run_size'])} points")
-            st.write("---")
-    
-    # Display critical plays with improved layout
+    # Display critical plays
     if not df_critical.empty:
-        st.write("### ⭐ Critical Plays (Last 5 Minutes)")
+        st.write("### ⭐ Game-Changing Plays")
         
-        # Create 3 columns for each play entry
+        # Define importance emojis and descriptions
+        importance_info = {
+            'Clutch Time': {'emoji': '🔥', 'desc': 'Crucial play in clutch time!'},
+            'Momentum Changer': {'emoji': '🌊', 'desc': 'Momentum-shifting play'},
+            'Big Defense': {'emoji': '🛡️', 'desc': 'Key defensive stop'},
+            'Key Basket': {'emoji': '🎯', 'desc': 'Important basket'},
+            'Normal': {'emoji': '⚡', 'desc': ''}
+        }
+        
         for _, play in df_critical.iterrows():
             col1, col2, col3 = st.columns([1, 2, 1])
             
@@ -1932,35 +1967,33 @@ def generate_game_insights(game_id):
             if pd.notnull(play['sub_type']):
                 play_type += f" ({play['sub_type']})"
             
+            importance = play['play_importance']
+            emoji = importance_info[importance]['emoji']
+            desc = importance_info[importance]['desc']
+            
             with col1:
-                st.write(f"**{play['game_time']}**")
+                st.write(f"**Q{play['period']} - {play['game_time']}**")
             
             with col2:
-                st.write(f"{team_name} | {play_type.upper()}")
+                st.write(f"{emoji} {team_name}")
+                st.write(f"{play_type.upper()}")
             
             with col3:
+                score_diff = abs(play['current_score_team1'] - play['current_score_team2'])
                 score_text = f"{play['current_score_team1']}-{play['current_score_team2']}"
-                if abs(play['lead']) <= 5:
-                    st.write(f"🔥 {score_text}")
+                if score_diff <= 3:
+                    st.write(f"😱 {score_text}")
                 else:
                     st.write(score_text)
             
-            # Add a small divider
+            if desc:
+                st.write(f"*{desc}*")
+            
             st.markdown("<hr style='margin: 5px 0px'>", unsafe_allow_html=True)
     
-    # Display game flow summary
-    st.write("### 📊 Game Flow Summary")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric("Lead Changes", lead_changes)
-    with col2:
-        if lead_changes > 10:
-            st.write("🎢 Back-and-forth battle!")
-        elif lead_changes > 5:
-            st.write("⚖️ Competitive game")
-        else:
-            st.write("👑 Dominant performance")
-
+    # If no data available
+    if df_runs.empty and df_critical.empty:
+        st.warning("No detailed game insights available for this match.")
 
 def generate_match_report(game_id):
     """Generate a comprehensive single-game analysis with detailed statistics."""
@@ -2059,7 +2092,7 @@ def generate_match_report(game_id):
     # Advanced Metrics
     generate_advanced_metrics(game_id)
 
-    generate_game_insights(game_id)
+   
     
 
 def fetch_match_report_data(game_id):

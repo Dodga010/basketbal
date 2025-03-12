@@ -1721,6 +1721,106 @@ def display_avg_substitutions_graph():
         ax.grid(axis="y", linestyle="--", alpha=0.7)
         st.pyplot(fig)
 
+def generate_match_report(game_id):
+    """Generate a comprehensive single-game analysis with detailed statistics."""
+    match_data, scorers_data, quarters_data = fetch_match_report_data(game_id)
+    
+    if match_data.empty:
+        st.error("No match data available.")
+        return
+    
+    # Match header
+    st.title(f"🏀 Match Report: {match_data.iloc[0]['home_team']} vs {match_data.iloc[0]['away_team']}")
+    
+    # Score display
+    col1, col2, col3 = st.columns([2, 1, 2])
+    with col1:
+        st.subheader(match_data.iloc[0]['home_team'])
+        st.header(f"{int(match_data.iloc[0]['home_score'])}")
+    with col2:
+        st.subheader("VS")
+    with col3:
+        st.subheader(match_data.iloc[0]['away_team'])
+        st.header(f"{int(match_data.iloc[0]['away_score'])}")
+    
+    # Quarter by quarter breakdown
+    st.subheader("📊 Quarter by Quarter")
+    quarter_cols = st.columns(4)
+    for idx, quarter in enumerate(['Q1', 'Q2', 'Q3', 'Q4'], 1):
+        with quarter_cols[idx-1]:
+            st.metric(
+                f"Quarter {idx}",
+                f"{quarters_data.iloc[0][quarter]}-{quarters_data.iloc[1][quarter]}",
+                delta=int(quarters_data.iloc[0][quarter]) - int(quarters_data.iloc[1][quarter])
+            )
+    
+    # Key statistics comparison
+    st.subheader("📈 Key Statistics")
+    stats_cols = st.columns([2, 2, 2])
+    
+    with stats_cols[0]:
+        home_fg_pct = float(match_data.iloc[0]['home_fg_pct'])
+        away_fg_pct = float(match_data.iloc[0]['away_fg_pct'])
+        st.metric(
+            "Field Goal %",
+            f"{home_fg_pct:.1f}% vs {away_fg_pct:.1f}%",
+            delta=f"{home_fg_pct - away_fg_pct:.1f}%"
+        )
+    
+    with stats_cols[1]:
+        home_3p_pct = float(match_data.iloc[0]['home_3p_pct'])
+        away_3p_pct = float(match_data.iloc[0]['away_3p_pct'])
+        st.metric(
+            "Three Point %",
+            f"{home_3p_pct:.1f}% vs {away_3p_pct:.1f}%",
+            delta=f"{home_3p_pct - away_3p_pct:.1f}%"
+        )
+    
+    with stats_cols[2]:
+        home_assists = int(match_data.iloc[0]['home_assists'])
+        away_assists = int(match_data.iloc[0]['away_assists'])
+        st.metric(
+            "Assists",
+            f"{home_assists} vs {away_assists}",
+            delta=home_assists - away_assists
+        )
+    
+    # Top scorers
+    st.subheader("🏆 Top Performers")
+    
+    # Split scorers by team
+    home_scorers = scorers_data[scorers_data['team_id'] == 1]
+    away_scorers = scorers_data[scorers_data['team_id'] == 2]
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.write(f"**{match_data.iloc[0]['home_team']}**")
+        for _, scorer in home_scorers.iterrows():
+            st.write(f"{scorer['player_name']}: {scorer['points']} pts ({scorer['fg']} FG, {scorer['three_pt']} 3PT)")
+    
+    with col2:
+        st.write(f"**{match_data.iloc[0]['away_team']}**")
+        for _, scorer in away_scorers.iterrows():
+            st.write(f"{scorer['player_name']}: {scorer['points']} pts ({scorer['fg']} FG, {scorer['three_pt']} 3PT)")
+    
+    # Game flow chart
+    st.subheader("📈 Game Flow")
+    plot_score_lead_full_game(game_id)
+    
+    # Shot Chart
+    st.subheader("🎯 Shot Chart")
+    plot_match_shot_chart(game_id)
+    
+    # Player Performance Comparison
+    generate_player_performance_comparison(game_id)
+    
+    # Advanced Metrics
+    generate_advanced_metrics(game_id)
+    
+    # Key Moments and Highlights
+    generate_key_moments(game_id)
+
 def fetch_match_report_data(game_id):
     """Fetch comprehensive match report data."""
     conn = sqlite3.connect(db_path)
@@ -1781,86 +1881,54 @@ def fetch_match_report_data(game_id):
     
     return match_data, scorers_data, quarters_data
 
-def generate_match_report(game_id):
-    """Generate a comprehensive single-game analysis with detailed statistics."""
-    match_data, scorers_data, quarters_data = fetch_match_report_data(game_id)
-    
-    if match_data.empty:
-        st.error("No match data available.")
+def plot_match_shot_chart(game_id):
+    """Plot the shot chart for a specific game."""
+    conn = sqlite3.connect(db_path)
+    query = """
+    SELECT 
+        player_name,
+        x_coord,
+        y_coord,
+        shot_result,
+        team_id
+    FROM Shots
+    WHERE game_id = ?;
+    """
+    df_shots = pd.read_sql_query(query, conn, params=(game_id,))
+    conn.close()
+
+    if df_shots.empty:
+        st.warning("No shot data available for this game.")
         return
-    
-    # Match header
-    st.title(f"🏀 Match Report: {match_data.iloc[0]['home_team']} vs {match_data.iloc[0]['away_team']}")
-    
-    # Score display
-    col1, col2, col3 = st.columns([2,1,2])
-    with col1:
-        st.subheader(match_data.iloc[0]['home_team'])
-        st.header(f"{int(match_data.iloc[0]['home_score'])}")
-    with col2:
-        st.subheader("VS")
-    with col3:
-        st.subheader(match_data.iloc[0]['away_team'])
-        st.header(f"{int(match_data.iloc[0]['away_score'])}")
-    
-    # Quarter by quarter breakdown
-    st.subheader("📊 Quarter by Quarter")
-    quarter_cols = st.columns(4)
-    for idx, quarter in enumerate(['Q1', 'Q2', 'Q3', 'Q4'], 1):
-        with quarter_cols[idx-1]:
-            st.metric(
-                f"Quarter {idx}",
-                f"{quarters_data.iloc[0][quarter]}-{quarters_data.iloc[1][quarter]}",
-                delta=int(quarters_data.iloc[0][quarter]) - int(quarters_data.iloc[1][quarter])
-            )
-    
-    # Key statistics comparison
-    st.subheader("📈 Key Statistics")
-    stats_cols = st.columns(3)
-    
-    with stats_cols[0]:
-        st.metric(
-            "Field Goal %",
-            f"{match_data.iloc[0]['home_fg_pct']:.1f}% vs {match_data.iloc[0]['away_fg_pct']:.1f}%",
-            delta=f"{float(match_data.iloc[0]['home_fg_pct']) - float(match_data.iloc[0]['away_fg_pct']):.1f}%"
-        )
-    
-    with stats_cols[1]:
-        st.metric(
-            "Three Point %",
-            f"{match_data.iloc[0]['home_3p_pct']:.1f}% vs {match_data.iloc[0]['away_3p_pct']:.1f}%",
-            delta=f"{float(match_data.iloc[0]['home_3p_pct']) - float(match_data.iloc[0]['away_3p_pct']):.1f}%"
-        )
-    
-    with stats_cols[2]:
-        st.metric(
-            "Assists",
-            f"{match_data.iloc[0]['home_assists']} vs {match_data.iloc[0]['away_assists']}",
-            delta=int(match_data.iloc[0]['home_assists']) - int(match_data.iloc[0]['away_assists'])
-        )
-    
-    # Top scorers
-    st.subheader("🏆 Top Performers")
-    
-    # Split scorers by team
-    home_scorers = scorers_data[scorers_data['team_id'] == 1]
-    away_scorers = scorers_data[scorers_data['team_id'] == 2]
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.write(f"**{match_data.iloc[0]['home_team']}**")
-        for _, scorer in home_scorers.iterrows():
-            st.write(f"{scorer['player_name']}: {scorer['points']} pts ({scorer['fg']} FG, {scorer['three_pt']} 3PT)")
-    
-    with col2:
-        st.write(f"**{match_data.iloc[0]['away_team']}**")
-        for _, scorer in away_scorers.iterrows():
-            st.write(f"{scorer['player_name']}: {scorer['points']} pts ({scorer['fg']} FG, {scorer['three_pt']} 3PT)")
-    
-    # Game flow chart
-    st.subheader("📈 Game Flow")
-    plot_score_lead_full_game(game_id)
+
+    # Convert coordinates to court image scale
+    df_shots['x_coord'] = df_shots['x_coord'] * 2.8
+    df_shots['y_coord'] = 261 - (df_shots['y_coord'] * 2.61)
+
+    # Load court image
+    court_img = mpimg.imread("fiba_courtonly.jpg")
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(8, 6))
+    ax.imshow(court_img, extent=[0, 280, 0, 261], aspect="auto")
+
+    # Plot shots
+    home_shots = df_shots[df_shots['team_id'] == 1]
+    away_shots = df_shots[df_shots['team_id'] == 2]
+
+    ax.scatter(home_shots['x_coord'], home_shots['y_coord'], c='blue', label='Home Team Shots', alpha=0.6)
+    ax.scatter(away_shots['x_coord'], away_shots['y_coord'], c='red', label='Away Team Shots', alpha=0.6)
+
+    ax.legend()
+
+    # Remove all axis elements
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_xticklabels([])
+    ax.set_yticklabels([])
+    ax.axis("off")
+
+    st.pyplot(fig)
 
 def display_match_report():
     st.subheader("🏀 Match Detail Analysis")

@@ -864,10 +864,14 @@ def plot_four_factors_stats(team1, team2, selected_stats):
 
     fig, ax = plt.subplots(figsize=(12, 8))
     for stat in selected_stats:
-        ax.plot(df_team1['game_id'], df_team1[stat], label=f"{team1} - {stat}")
-        ax.plot(df_team2['game_id'], df_team2[stat], label=f"{team2} - {stat}", linestyle='--')
+        # Instead of using game_id, create sequential numbers
+        match_numbers1 = range(1, len(df_team1) + 1)
+        match_numbers2 = range(1, len(df_team2) + 1)
+        
+        ax.plot(match_numbers1, df_team1[stat], label=f"{team1} - {stat}")
+        ax.plot(match_numbers2, df_team2[stat], label=f"{team2} - {stat}", linestyle='--')
 
-    ax.set_xlabel("Game ID")
+    ax.set_xlabel("Match Number")
     ax.set_ylabel("Value")
     ax.set_title(f"{team1} vs {team2} - Four Factors Statistics")
     ax.legend()

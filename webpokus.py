@@ -2428,7 +2428,7 @@ def fetch_match_report_data(game_id):
     return match_data, scorers_data, quarters_data
 
 def plot_match_shot_chart(game_id):
-    """Plot the shot chart for a specific game."""
+    """Plot the shot chart for a specific game with made/missed shots for both teams."""
     conn = sqlite3.connect(db_path)
     query = """
     SELECT 
@@ -2458,14 +2458,28 @@ def plot_match_shot_chart(game_id):
     fig, ax = plt.subplots(figsize=(8, 6))
     ax.imshow(court_img, extent=[0, 280, 0, 261], aspect="auto")
 
-    # Plot shots
-    home_shots = df_shots[df_shots['team_id'] == 1]
-    away_shots = df_shots[df_shots['team_id'] == 2]
+    # Plot shots for each team with made/missed distinction
+    for team_id in [1, 2]:  # Team 1 (Home) and Team 2 (Away)
+        team_shots = df_shots[df_shots['team_id'] == team_id]
+        
+        # Made shots (circles)
+        made_shots = team_shots[team_shots['shot_result'] == 1]
+        # Missed shots (crosses)
+        missed_shots = team_shots[team_shots['shot_result'] == 0]
+        
+        if team_id == 1:  # Home team
+            ax.scatter(made_shots['x_coord'], made_shots['y_coord'], 
+                      marker='o', c='red', s=50, label='Home Made', alpha=0.7)
+            ax.scatter(missed_shots['x_coord'], missed_shots['y_coord'], 
+                      marker='x', c='red', s=50, label='Home Missed', alpha=0.7)
+        else:  # Away team
+            ax.scatter(made_shots['x_coord'], made_shots['y_coord'], 
+                      marker='o', c='blue', s=50, label='Away Made', alpha=0.7)
+            ax.scatter(missed_shots['x_coord'], missed_shots['y_coord'], 
+                      marker='x', c='blue', s=50, label='Away Missed', alpha=0.7)
 
-    ax.scatter(home_shots['x_coord'], home_shots['y_coord'], c='blue', label='Home Team Shots', alpha=0.6)
-    ax.scatter(away_shots['x_coord'], away_shots['y_coord'], c='red', label='Away Team Shots', alpha=0.6)
-
-    ax.legend()
+    # Add legend
+    ax.legend(loc='upper right', bbox_to_anchor=(1.0, 1.0))
 
     # Remove all axis elements
     ax.set_xticks([])

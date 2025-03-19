@@ -1,3 +1,4 @@
+
 import os
 import sqlite3
 import streamlit as st
@@ -9,6 +10,7 @@ import seaborn as sns
 import numpy as np
 from scipy.interpolate import UnivariateSpline
 from scipy.ndimage import gaussian_filter1d
+import plotly.graph_objects as go
 
 # ✅ Define SQLite database path (works locally & online)
 db_path = os.path.join(os.path.dirname(__file__), "database.db")
@@ -809,6 +811,7 @@ def plot_shot_distribution(distribution):
     # Display plot
     st.pyplot(fig)
 
+
 def plot_first_5_shots(df_shots):
     fig, ax = plt.subplots(figsize=(6, 6))
     ax.set_xlim(0, 100)
@@ -997,69 +1000,97 @@ def plot_team_stats_correlation(df):
     plt.title("Correlation Heatmap of Team Statistics")
     st.pyplot(plt)
 
-# ✅ Generate Shot Chart
-def generate_shot_chart(player_name):
-    """Generate a shot chart with heatmap restricted within the court boundaries."""
-
+def generate_shot_chart(player_name, show_heatmap=False, shot_types=None):
+    """Generate a shot chart with optional heatmap and shot type filtering."""
     if not os.path.exists("fiba_courtonly.jpg"):
         st.error("⚠️ Court image file 'fiba_courtonly.jpg' is missing!")
         return
 
     conn = sqlite3.connect(db_path)
     query = """
-    SELECT x_coord, y_coord, shot_result
+    SELECT 
+        x_coord, 
+        y_coord, 
+        shot_result,
+        CASE 
+            WHEN action_type = '3pt' THEN '3PT'
+            ELSE '2PT'
+        END as shot_type
     FROM Shots 
-    WHERE player_name = ?;
+    WHERE player_name = ?
     """
     df_shots = pd.read_sql_query(query, conn, params=(player_name,))
     conn.close()
 
     if df_shots.empty:
-        st.warning(f"❌ No shot data found for {player_name}.")
+        st.warning(f"No shot data found for {player_name}.")
         return
 
-    # ✅ Convert shot_result to match 'made' or 'missed' conditions
-    df_shots["shot_result"] = df_shots["shot_result"].astype(str)
-    df_shots["shot_result"] = df_shots["shot_result"].replace({"1": "made", "0": "missed"})
+    # Filter by shot type if specified
+    if shot_types and "All" not in shot_types:
+        df_shots = df_shots[df_shots['shot_type'].isin(shot_types)]
 
-    # ✅ Scale coordinates to match court image dimensions
-    df_shots["x_coord"] = df_shots["x_coord"] * 2.8  
-    df_shots["y_coord"] = 261 - (df_shots["y_coord"] * 2.61)
+    # Scale coordinates
+    df_shots['x_coord'] = df_shots['x_coord'] * 2.8
+    df_shots['y_coord'] = 261 - (df_shots['y_coord'] * 2.61)
 
-    # ✅ Load court image
+    # Create figure
+    fig, ax = plt.subplots(figsize=(10, 8))
+    
+    # Draw court
     court_img = mpimg.imread("fiba_courtonly.jpg")
-
-    # ✅ Create figure
-    fig, ax = plt.subplots(figsize=(8, 6))
     ax.imshow(court_img, extent=[0, 280, 0, 261], aspect="auto")
 
-    # ✅ Heatmap (restrict to court area)
-    sns.kdeplot(
-        data=df_shots, 
-        x="x_coord", y="y_coord", 
-        cmap="coolwarm", fill=True, alpha=0.5, ax=ax, 
-        bw_adjust=0.5, clip=[[0, 280], [0, 261]]  # 🔥 Restrict heatmap within the court
-    )
+    # Add heatmap if requested
+    if show_heatmap:
+        sns.kdeplot(
+            data=df_shots, 
+            x="x_coord", y="y_coord", 
+            cmap="YlOrRd", fill=True, alpha=0.5,
+            ax=ax, bw_adjust=0.5,
+            clip=[[0, 280], [0, 261]]
+        )
 
-    # ✅ Plot individual shots
-    made_shots = df_shots[df_shots["shot_result"] == "made"]
-    missed_shots = df_shots[df_shots["shot_result"] == "missed"]
+    # Plot shots
+    made_shots = df_shots[df_shots['shot_result'] == 1]
+    missed_shots = df_shots[df_shots['shot_result'] == 0]
 
-    ax.scatter(made_shots["x_coord"], made_shots["y_coord"], 
-               c="lime", edgecolors="black", s=35, alpha=1, zorder=3, label="Made Shots")
+    # Made shots (green circles)
+    ax.scatter(made_shots['x_coord'], made_shots['y_coord'],
+              marker='o', c='green', s=50, alpha=0.7,
+              label='Made Shots')
 
-    ax.scatter(missed_shots["x_coord"], missed_shots["y_coord"], 
-               c="red", edgecolors="black", s=35, alpha=1, zorder=3, label="Missed Shots")
+    # Missed shots (red X's)
+    ax.scatter(missed_shots['x_coord'], missed_shots['y_coord'],
+              marker='x', c='red', s=50, alpha=0.7,
+              label='Missed Shots')
 
-    # ✅ Remove all axis elements (clean chart)
+    # Add legend
+    ax.legend(loc='upper right')
+
+    # Add shot statistics
+    total_shots = len(df_shots)
+    made_shots_count = len(made_shots)
+    fg_percentage = (made_shots_count / total_shots * 100) if total_shots > 0 else 0
+    
+    ax.set_title(f"{player_name}'s Shot Chart\n"
+                 f"FG: {made_shots_count}/{total_shots} ({fg_percentage:.1f}%)")
+
+    # Remove axes
     ax.set_xticks([])
     ax.set_yticks([])
-    ax.set_xticklabels([])
-    ax.set_yticklabels([])
-    ax.axis("off")  # Hide axis
+    ax.axis('off')
 
-    # ✅ Display chart in Streamlit
     st.pyplot(fig)
+
+    # Display shot statistics
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Shots", total_shots)
+    with col2:
+        st.metric("Made Shots", made_shots_count)
+    with col3:
+        st.metric("Field Goal %", f"{fg_percentage:.1f}%")
 
 def fetch_team_avg_substitutions():
     conn = sqlite3.connect(db_path)
@@ -2540,9 +2571,623 @@ def generate_advanced_metrics(game_id):
             st.metric("Free Throw Rate", 
                      f"{team_metrics['ftr_percentage']:.1f}%" if pd.notnull(team_metrics['ftr_percentage']) else "N/A")
 
+def display_in_game_page():
+    """Display the In Game page with live game stats and analysis."""
+    st.title("🏀 In Game Analysis")
+    
+    # Game selector
+    selected_match = create_match_selector()
+    
+    if selected_match:
+        # Create tabs for different views
+        tab1, tab2, tab3, tab4 = st.tabs([
+            "Live Stats 📊", 
+            "Play by Play 🎯", 
+            "Team Analysis 📈",
+            "Player Stats 👤"
+        ])
+        
+        with tab1:
+            st.subheader("Live Game Statistics")
+            # Display current game stats
+            display_team_stats(selected_match)
+            
+            # Add score progression chart
+            st.subheader("Score Progression")
+            plot_score_lead_full_game(selected_match)
+        
+        with tab2:
+            st.subheader("Play by Play")
+            # Add quarter selector
+            quarter = st.selectbox(
+                "Select Quarter",
+                ["All Quarters", "Q1", "Q2", "Q3", "Q4"],
+                key="quarter_selector"
+            )
+            
+            # Fetch and display play by play data
+            selected_quarter = None if quarter == "All Quarters" else int(quarter[-1])
+            actions = fetch_pbp_actions(selected_match, selected_quarter)
+            display_pbp_actions(actions)
+        
+        with tab3:
+            st.subheader("Team Analysis")
+            # Show team comparisons and advanced metrics
+            generate_advanced_metrics(selected_match)
+            
+            # Show substitution patterns
+            substitutions = count_substitutions(selected_match)
+            if not substitutions.empty:
+                st.subheader("Substitution Patterns")
+                st.dataframe(substitutions)
+        
+        with tab4:
+            st.subheader("Player Statistics")
+            # Show player performance comparison
+            generate_player_performance_comparison(selected_match)
+            
+            # Show starting lineups
+            starting_five = fetch_starting_five(selected_match)
+            if not starting_five.empty:
+                st.subheader("Starting Lineups")
+                
+                col1, col2 = st.columns(2)
+                team1_starters = starting_five[starting_five['team_id'] == 1]
+                team2_starters = starting_five[starting_five['team_id'] == 2]
+                
+                with col1:
+                    st.write("**Home Team**")
+                    st.dataframe(team1_starters[['player_name']])
+                
+                with col2:
+                    st.write("**Away Team**")
+                    st.dataframe(team2_starters[['player_name']])
+    else:
+        st.info("Please select a match to view in-game analysis.")
+
+def analyze_shot_patterns(player_name):
+    """Analyze shot patterns for a player."""
+    conn = sqlite3.connect(db_path)
+    query = """
+    SELECT 
+        x_coord, 
+        y_coord, 
+        shot_result,
+        action_type,
+        shot_sub_type,
+        period,
+        game_id
+    FROM Shots 
+    WHERE player_name = ?;
+    """
+    df_shots = pd.read_sql_query(query, conn, params=(player_name,))
+    conn.close()
+
+    if df_shots.empty:
+        st.warning(f"No shot data found for {player_name}.")
+        return
+
+    # Calculate shooting percentages
+    total_shots = len(df_shots)
+    made_shots = df_shots['shot_result'].sum()
+    shooting_pct = (made_shots / total_shots * 100) if total_shots > 0 else 0
+
+    # Calculate distance for each shot
+    df_shots['distance'] = df_shots.apply(
+        lambda row: calculate_distance_from_basket(row['x_coord'], row['y_coord']), 
+        axis=1
+    )
+
+    # Shot type and subtype distribution
+    shot_analysis = df_shots.groupby(['action_type', 'shot_sub_type']).agg({
+        'shot_result': ['count', 'mean']
+    }).round(3)
+    
+    shot_analysis.columns = ['Attempts', 'Success Rate']
+    shot_analysis['Success Rate'] = (shot_analysis['Success Rate'] * 100).round(1).astype(str) + '%'
+
+    # Display overall statistics
+    st.write("### Overall Shooting Statistics")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Shots", total_shots)
+    with col2:
+        st.metric("Made Shots", made_shots)
+    with col3:
+        st.metric("Field Goal %", f"{shooting_pct:.1f}%")
+
+    # Shot distribution
+    st.write("### Shot Type Distribution")
+    
+    # Create two columns for shot types and shot chart
+    col1, col2 = st.columns([1, 2])
+    
+    with col1:
+        st.dataframe(shot_analysis)
+    
+    with col2:
+        # Create shot chart
+        fig, ax = plt.subplots(figsize=(10, 8))
+        court_img = mpimg.imread("fiba_courtonly.jpg")
+        ax.imshow(court_img, extent=[0, 280, 0, 261], aspect="auto")
+
+        # Scale coordinates
+        df_shots['x_coord_scaled'] = df_shots['x_coord'] * 2.8
+        df_shots['y_coord_scaled'] = 261 - (df_shots['y_coord'] * 2.61)
+
+        # Plot made shots
+        made = df_shots[df_shots['shot_result'] == 1]
+        ax.scatter(made['x_coord_scaled'], made['y_coord_scaled'], 
+                  c='green', marker='o', s=50, alpha=0.7, label='Made')
+
+        # Plot missed shots
+        missed = df_shots[df_shots['shot_result'] == 0]
+        ax.scatter(missed['x_coord_scaled'], missed['y_coord_scaled'], 
+                  c='red', marker='x', s=50, alpha=0.7, label='Missed')
+
+        ax.legend()
+        ax.axis('off')
+        st.pyplot(fig)
+
+    # Shot distance analysis
+    st.write("### Shot Distance Analysis")
+    distance_bins = [0, 3, 5, 7, 10, float('inf')]
+    distance_labels = ['Close Range (0-3m)', 'Short Range (3-5m)', 
+                      'Mid Range (5-7m)', 'Long Mid (7-10m)', 'Long Range (10m+)']
+    df_shots['distance_range'] = pd.cut(df_shots['distance'], bins=distance_bins, labels=distance_labels)
+    
+    distance_stats = df_shots.groupby('distance_range').agg({
+        'shot_result': ['count', 'mean']
+    }).round(3)
+    
+    distance_stats.columns = ['Attempts', 'Success Rate']
+    distance_stats['Success Rate'] = (distance_stats['Success Rate'] * 100).round(1).astype(str) + '%'
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.dataframe(distance_stats)
+    
+    with col2:
+        # Visualize shot success by distance
+        shot_success_by_distance = df_shots.groupby('distance_range')['shot_result'].mean() * 100
+        fig, ax = plt.subplots(figsize=(10, 6))
+        shot_success_by_distance.plot(kind='bar')
+        plt.title('Shot Success Rate by Distance')
+        plt.ylabel('Success Rate (%)')
+        plt.xticks(rotation=45)
+        st.pyplot(fig)
+
+    # Favorite shot types
+    st.write("### Preferred Shot Types")
+    favorite_shots = df_shots.groupby('shot_sub_type').agg({
+        'shot_result': ['count', 'mean']
+    }).round(3)
+    
+    favorite_shots.columns = ['Attempts', 'Success Rate']
+    favorite_shots = favorite_shots.sort_values('Attempts', ascending=False)
+    favorite_shots['Success Rate'] = (favorite_shots['Success Rate'] * 100).round(1).astype(str) + '%'
+    
+    st.dataframe(favorite_shots)
+
+    # Most successful shot types (minimum 5 attempts)
+    st.write("### Most Successful Shot Types (min. 5 attempts)")
+    successful_shots = df_shots.groupby('shot_sub_type').filter(lambda x: len(x) >= 5)
+    successful_shots = successful_shots.groupby('shot_sub_type').agg({
+        'shot_result': ['count', 'mean']
+    }).round(3)
+    
+    successful_shots.columns = ['Attempts', 'Success Rate']
+    successful_shots = successful_shots.sort_values(('Success Rate'), ascending=False)
+    successful_shots['Success Rate'] = (successful_shots['Success Rate'] * 100).round(1).astype(str) + '%'
+    
+    st.dataframe(successful_shots)
+
+def calculate_shot_zones(shots_df):
+    """Calculate shot distribution and success rates by zone."""
+    def get_zone(row):
+        x, y = row['x_coord'], row['y_coord']
+        distance = np.sqrt((x - 50)**2 + (y - 25)**2)
+        
+        if distance < 5:
+            return 'Paint'
+        elif distance < 15:
+            return 'Mid-range'
+        else:
+            return '3PT'
+    
+    shots_df['zone'] = shots_df.apply(get_zone, axis=1)
+    zones = shots_df.groupby('zone').agg({
+        'shot_result': ['count', 'mean']
+    }).round(3)
+    
+    return zones.to_dict()
+
+def identify_hot_zones(shots_df):
+    """Identify areas where a player has high success rate."""
+    if shots_df.empty:
+        return {}
+        
+    # Create court zones grid
+    x_bins = np.linspace(0, 100, 5)
+    y_bins = np.linspace(0, 50, 3)
+    
+    shots_df['x_bin'] = pd.cut(shots_df['x_coord'], x_bins, labels=False)
+    shots_df['y_bin'] = pd.cut(shots_df['y_coord'], y_bins, labels=False)
+    
+    hot_zones = shots_df.groupby(['x_bin', 'y_bin']).agg({
+        'shot_result': ['count', 'mean']
+    }).reset_index()
+    
+    # Filter for zones with high success rate (above 40%) and minimum attempts
+    hot_zones = hot_zones[
+        (hot_zones[('shot_result', 'mean')] > 0.4) & 
+        (hot_zones[('shot_result', 'count')] >= 3)
+    ]
+    
+    return hot_zones.to_dict()
+
+def predict_next_shot(patterns, game_situation):
+    """Predict the most likely next shot based on patterns and current game situation."""
+    predictions = []
+    
+    for player, stats in patterns['player_patterns'].items():
+        # Basic probability of player taking the shot
+        shot_prob = stats['total_shots'] / sum(p['total_shots'] for p in patterns['player_patterns'].values())
+        
+        # Adjust for hot zones
+        hot_zone_bonus = 0.1 if stats['hot_zones'] else 0
+        
+        # Adjust for game situation
+        if game_situation['score_diff'] < -5:
+            # Team is behind - prefer high percentage shots and shooters
+            situational_bonus = stats['success_rate'] * 0.2
+        else:
+            situational_bonus = 0
+            
+        final_prob = shot_prob + hot_zone_bonus + situational_bonus
+        
+        most_likely_zone = max(stats['shot_zones'].items(), key=lambda x: x[1][('shot_result', 'count')])[0]
+        preferred_type = max(stats['preferred_types'].items(), key=lambda x: x[1])[0]
+        
+        predictions.append({
+            'player': player,
+            'probability': final_prob,
+            'likely_zone': most_likely_zone,
+            'shot_type': preferred_type,
+            'expected_success_rate': stats['success_rate']
+        })
+    
+    return sorted(predictions, key=lambda x: x['probability'], reverse=True)
+
+def display_shot_analysis(lineup_players, team_name, game_situation):
+    """Display shot analysis and predictions."""
+    
+    patterns = analyze_shot_patterns(lineup_players, team_name, 
+                                   game_situation['game_time'], 
+                                   game_situation['quarter'])
+    
+    if not patterns:
+        st.warning("No historical shot data available for this lineup combination.")
+        return
+    
+    # Predict next shot
+    shot_predictions = predict_next_shot(patterns, game_situation)
+    
+    # Display Predictions
+    st.subheader("🎯 Shot Predictions")
+    
+    # Top 3 most likely shooters
+    cols = st.columns(3)
+    for i, pred in enumerate(shot_predictions[:3]):
+        with cols[i]:
+            st.metric(
+                f"#{i+1} Most Likely Shooter",
+                pred['player'],
+                f"{pred['probability']*100:.1f}%"
+            )
+            st.write(f"Likely zone: {pred['likely_zone']}")
+            st.write(f"Shot type: {pred['shot_type']}")
+            st.write(f"Success rate: {pred['expected_success_rate']*100:.1f}%")
+    
+    # Shot Chart
+    st.subheader("📊 Team Shot Distribution")
+    
+    # Create shot chart visualization
+    fig, ax = plt.subplots(figsize=(10, 8))
+    
+    # Plot court
+    draw_court(ax)
+    
+    # Plot shot locations with heatmap
+    for player, stats in patterns['player_patterns'].items():
+        player_shots = pd.DataFrame(stats['hot_zones'])
+        if not player_shots.empty:
+            sns.kdeplot(
+                data=player_shots,
+                x='x_coord',
+                y='y_coord',
+                levels=10,
+                thresh=.2,
+                alpha=.5
+            )
+    
+    st.pyplot(fig)
+    
+    # Time-based Analysis
+    st.subheader("⏱️ Time-based Shot Patterns")
+    time_patterns = patterns['time_patterns']
+    
+    # Show when team is most likely to shoot
+    fig2, ax2 = plt.subplots(figsize=(10, 4))
+    sns.lineplot(
+        data=time_patterns,
+        x='game_time',
+        y=('shot_result', 'count'),
+        hue='period'
+    )
+    st.pyplot(fig2)
+
+def display_in_game_page():
+    st.title("🏀 In-Game Shot Prediction")
+    
+    # Game Situation Input
+    st.subheader("Current Game Situation")
+    
+    cols = st.columns(4)
+    with cols[0]:
+        teams = fetch_teams()
+        team = st.selectbox("Team", teams)
+    
+    with cols[1]:
+        quarter = st.selectbox("Quarter", [1, 2, 3, 4])
+    
+    with cols[2]:
+        game_time = st.text_input("Time Remaining", "10:00")
+    
+    with cols[3]:
+        score_diff = st.number_input("Score Difference", -50, 50, 0)
+    
+    # Lineup Selection
+    st.subheader("Current Lineup")
+    team_players = fetch_team_players(team)
+    lineup = st.multiselect("Select 5 players", team_players, max_selections=5)
+    
+    if len(lineup) == 5:
+        game_situation = {
+            'quarter': quarter,
+            'game_time': game_time,
+            'score_diff': score_diff
+        }
+        
+        display_shot_analysis(lineup, team, game_situation)
+
+def analyze_shot_patterns(player_name):
+    """Analyze shot patterns for a player."""
+    conn = sqlite3.connect(db_path)
+    query = """
+    SELECT 
+        x_coord, 
+        y_coord, 
+        shot_result,
+        action_type,
+        shot_sub_type,
+        period,
+        game_id
+    FROM Shots 
+    WHERE player_name = ?;
+    """
+    df_shots = pd.read_sql_query(query, conn, params=(player_name,))
+    conn.close()
+
+    if df_shots.empty:
+        st.warning(f"No shot data found for {player_name}.")
+        return
+
+    # Calculate shooting percentages
+    total_shots = len(df_shots)
+    made_shots = df_shots['shot_result'].sum()
+    shooting_pct = (made_shots / total_shots * 100) if total_shots > 0 else 0
+
+    # Shot type and subtype distribution
+    shot_analysis = df_shots.groupby(['action_type', 'shot_sub_type']).agg({
+        'shot_result': ['count', 'mean']
+    }).round(3)
+    
+    shot_analysis.columns = ['Attempts', 'Success Rate']
+    shot_analysis['Success Rate'] = (shot_analysis['Success Rate'] * 100).round(1).astype(str) + '%'
+
+    # Display overall statistics
+    st.write("### Overall Shooting Statistics")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Shots", total_shots)
+    with col2:
+        st.metric("Made Shots", made_shots)
+    with col3:
+        st.metric("Field Goal %", f"{shooting_pct:.1f}%")
+
+    # Shot distribution
+    st.write("### Shot Type Distribution")
+    st.dataframe(shot_analysis)
+
+    # Favorite shot types
+    st.write("### Preferred Shot Types")
+    favorite_shots = df_shots.groupby('shot_sub_type').agg({
+        'shot_result': ['count', 'mean']
+    }).round(3)
+    
+    favorite_shots.columns = ['Attempts', 'Success Rate']
+    favorite_shots = favorite_shots.sort_values('Attempts', ascending=False)
+    favorite_shots['Success Rate'] = (favorite_shots['Success Rate'] * 100).round(1).astype(str) + '%'
+    
+    st.dataframe(favorite_shots)
+
+    # Most successful shot types (minimum 5 attempts)
+    st.write("### Most Successful Shot Types (min. 5 attempts)")
+    successful_shots = df_shots.groupby('shot_sub_type').filter(lambda x: len(x) >= 5)
+    successful_shots = successful_shots.groupby('shot_sub_type').agg({
+        'shot_result': ['count', 'mean']
+    }).round(3)
+    
+    successful_shots.columns = ['Attempts', 'Success Rate']
+    successful_shots = successful_shots.sort_values(('Success Rate'), ascending=False)
+    successful_shots['Success Rate'] = (successful_shots['Success Rate'] * 100).round(1).astype(str) + '%'
+    
+    st.dataframe(successful_shots)
+
+        # Add opponent analysis in an expander
+    with st.expander("Analysis by Opponent", expanded=False):
+        conn = sqlite3.connect(db_path)
+        query = """
+        WITH PlayerTeam AS (
+            SELECT s.game_id, s.team_id, t.name as player_team
+            FROM Shots s
+            JOIN Teams t ON s.game_id = t.game_id AND s.team_id = t.tm
+            WHERE s.player_name = ?
+            GROUP BY s.game_id, s.team_id
+        )
+        SELECT 
+            s.shot_result,
+            s.action_type,
+            s.shot_sub_type,
+            s.x_coord,
+            s.y_coord,
+            t.name as opponent_team
+        FROM Shots s
+        JOIN PlayerTeam pt ON s.game_id = pt.game_id
+        JOIN Teams t ON t.game_id = s.game_id 
+            AND t.tm = CASE 
+                WHEN pt.team_id = 1 THEN 2 
+                ELSE 1 
+            END
+        WHERE s.player_name = ?;
+        """
+        df_opponent = pd.read_sql_query(query, conn, params=(player_name, player_name))
+        conn.close()
+
+        if not df_opponent.empty:
+            # Overall stats by opponent
+            team_analysis = df_opponent.groupby('opponent_team').agg({
+                'shot_result': ['count', 'mean']
+            }).round(3)
+            
+            team_analysis.columns = ['Total Shots', 'Success Rate']
+            team_analysis = team_analysis.sort_values('Total Shots', ascending=False)
+            team_analysis['Success Rate'] = (team_analysis['Success Rate'] * 100).round(1)
+            
+            # Visualization of success rates against all opponents
+            fig_success = px.bar(
+                team_analysis.reset_index(),
+                x='opponent_team',
+                y='Success Rate',
+                title=f"Shot Success Rate Against Different Teams - {player_name}",
+                labels={'opponent_team': 'Opponent Team', 'Success Rate': 'Success Rate (%)'}
+            )
+            st.plotly_chart(fig_success)
+
+            # Shot type distribution
+            shot_type_dist = df_opponent.groupby(['opponent_team', 'shot_sub_type']).size().unstack(fill_value=0)
+            fig_dist = px.bar(
+                shot_type_dist.reset_index(),
+                x='opponent_team',
+                y=shot_type_dist.columns,
+                title=f"Shot Type Distribution Against Teams - {player_name}",
+                barmode='stack'
+            )
+            st.plotly_chart(fig_dist)
+
+            # Allow user to select a specific team
+            teams = sorted(df_opponent['opponent_team'].unique())
+            selected_team = st.selectbox("Select Team to View Details", teams)
+            
+            if selected_team:
+                team_shots = df_opponent[df_opponent['opponent_team'] == selected_team]
+                
+                # Shot chart for selected team
+                fig_court = create_shot_chart(
+                    team_shots,
+                    f"Shot Chart Against {selected_team}"
+                )
+                st.plotly_chart(fig_court)
+
+                # Detailed shot type analysis
+                detailed_analysis = team_shots.groupby('shot_sub_type').agg({
+                    'shot_result': ['count', 'mean']
+                }).round(3)
+                
+                detailed_analysis.columns = ['Attempts', 'Success Rate']
+                detailed_analysis = detailed_analysis.sort_values('Attempts', ascending=False)
+                detailed_analysis['Success Rate'] = (detailed_analysis['Success Rate'] * 100).round(1).astype(str) + '%'
+                
+                st.write(f"#### Shot Details Against {selected_team}")
+                st.dataframe(detailed_analysis)
+
+                # Shot success by zone visualization
+                success_by_zone = px.scatter(
+                    team_shots,
+                    x='x_coord',
+                    y='y_coord',
+                    color='shot_result',
+                    title=f"Shot Success by Location Against {selected_team}",
+                    color_discrete_map={1: 'green', 0: 'red'},
+                    labels={'shot_result': 'Shot Result', 'x_coord': 'X Coordinate', 'y_coord': 'Y Coordinate'}
+                )
+                st.plotly_chart(success_by_zone)
+        
+def create_shot_chart(df_shots, title):
+    """Create a shot chart using plotly"""
+    # Create basketball court
+    fig = go.Figure()
+
+    # Add court outline
+    fig.add_shape(type="rect",
+                  x0=-250, y0=-47.5, x1=250, y1=422.5,
+                  line=dict(color="black", width=1))
+    
+    # Add three point line
+    fig.add_shape(type="circle",
+                  x0=-220, y0=-47.5, x1=220, y1=392.5,
+                  line=dict(color="black", width=1))
+    
+    # Add free throw circle
+    fig.add_shape(type="circle",
+                  x0=-60, y0=140, x1=60, y1=260,
+                  line=dict(color="black", width=1))
+
+    # Plot shots
+    made_shots = df_shots[df_shots['shot_result'] == 1]
+    missed_shots = df_shots[df_shots['shot_result'] == 0]
+
+    fig.add_trace(go.Scatter(
+        x=made_shots['x_coord'],
+        y=made_shots['y_coord'],
+        mode='markers',
+        name='Made',
+        marker=dict(color='green', size=8, symbol='circle'),
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=missed_shots['x_coord'],
+        y=missed_shots['y_coord'],
+        mode='markers',
+        name='Missed',
+        marker=dict(color='red', size=8, symbol='x'),
+    ))
+
+    fig.update_layout(
+        title=title,
+        showlegend=True,
+        xaxis=dict(range=[-250, 250], showgrid=False),
+        yaxis=dict(range=[-47.5, 422.5], showgrid=False),
+        yaxis_scaleanchor="x",
+    )
+
+    return fig
+
 def main():
     st.title("🏀 Basketball Stats Viewer")
-    page = st.sidebar.selectbox("📌 Choose a page", ["Team Season Boxscore", "Shot Chart","Match report", "Four Factors", "Lebron"])
+    page = st.sidebar.selectbox("📌 Choose a page", ["Team Season Boxscore", "Shot Chart","Match report", "Four Factors", "Lebron","In Game"])
 
     if page == "Match Detail":
         display_match_detail()
@@ -2621,6 +3266,9 @@ def main():
 
     elif page == "Match report":
         display_match_report()
+
+    elif page == "In Game":
+        display_in_game_page()
 
     elif page == "Lebron":
         # Run the function to display the page
@@ -2747,82 +3395,89 @@ def main():
             st.plotly_chart(fig_referee)
 
     elif page == "Shot Chart":
-        st.subheader("🎯 Player Shot Chart")
-        players = fetch_players()
-
-        if not players:
-            st.warning("No player data available.")
-        else:
-            player_name = st.selectbox("Select a Player", players)
-            generate_shot_chart(player_name)
-            # Display shot data with distance
-            display_shot_data_with_distance(player_name)
-
-            # Calculate and plot interpolated distribution
-            df_shots_with_distance = fetch_shot_data(player_name)
-            if not df_shots_with_distance.empty:
-                df_shots_with_distance["distance_from_basket_units"] = df_shots_with_distance.apply(lambda row: calculate_distance_from_basket(row["x_coord"], row["y_coord"]), axis=1)
-                df_shots_with_distance["distance_from_basket_m"] = df_shots_with_distance["distance_from_basket_units"].apply(convert_units_to_meters)
-                x_smooth, y_smooth = calculate_interpolated_distribution(df_shots_with_distance)
-                # Call the plot_interpolated_distribution function without columns
-                plot_interpolated_distribution(player_name)
-
-            # Plot FG percentage with frequency
-            plot_fg_percentage_with_frequency(player_name)
-
-            # Mean stats per game
-            player_stats = fetch_player_stats(player_name)
-            if not player_stats.empty:
-                st.subheader(f"📊 {player_name} - Average Stats per Game")
-                st.dataframe(player_stats.style.format({
-                    "PTS": "{:.1f}",
-                    "FG%": "{:.1%}",
-                    "3P%": "{:.1%}",
-                    "2P%": "{:.1%}",
-                    "FT%": "{:.1%}",
-                    "PPS": "{:.2f}"
-                }))
+        st.subheader("🎯 Shot Chart Analysis")
+    
+        # Create two columns for layout
+        col1, col2 = st.columns([1, 3])
+        
+        with col1:
+            # Player selection
+            players = fetch_players()
+            if not players:
+                st.warning("No player data available.")
             else:
-                st.warning(f"No statistics available for {player_name}.")
+                player_name = st.selectbox("Select a Player", players)
+                
+                # Add filters
+                st.write("### Filters")
+                shot_type = st.multiselect(
+                    "Shot Type",
+                    ["2PT", "3PT", "All"],
+                    default=["All"]
+                )
+                
+                show_heatmap = st.checkbox("Show Shot Density Heatmap", value=False)
+                
+        with col2:
+            if player_name:
+                # Main shot chart
+                st.write(f"### Shot Chart for {player_name}")
+                generate_shot_chart(player_name, show_heatmap=show_heatmap, shot_types=shot_type)
+                
+                # Shot distribution charts
+                st.write("### Shot Distribution Analysis")
+                col_dist1, col_dist2 = st.columns(2)
+                
+                with col_dist1:
+                    # Shot success rate by distance
+                    plot_fg_percentage_with_frequency(player_name)
+                
+                with col_dist2:
+                    # Shot distribution comparison with league average
+                    plot_interpolated_distribution(player_name)
+                
+                # Player stats section
+                st.write("### Player Statistics")
+                
+                # Game-by-game stats in an expander
+                with st.expander("Game by Game Statistics", expanded=False):
+                    player_game_stats = fetch_player_game_stats(player_name)
+                    if not player_game_stats.empty:
+                        st.dataframe(player_game_stats.style.format({
+                            "FG%": "{:.1f}%",
+                            "3P%": "{:.1f}%",
+                            "2P%": "{:.1f}%",
+                            "FT%": "{:.1f}%",
+                            "PPS": "{:.1f}",
+                            "PTS": "{:.1f}",
+                            "REB": "{:.1f}",
+                            "AST": "{:.1f}",
+                            "STL": "{:.1f}",
+                            "BLK": "{:.1f}",
+                            "TO": "{:.1f}"
+                        }))
+                    else:
+                        st.warning(f"No game-by-game stats available for {player_name}.")
+                
+                # Comparison with league averages
+                with st.expander("League Comparison", expanded=False):
+                    player_vs_league_40 = fetch_player_and_league_stats_per_40(player_name)
+                    if not player_vs_league_40.empty:
+                        st.dataframe(player_vs_league_40.style.format({
+                            "PTS": "{:.1f}",
+                            "REB": "{:.1f}",
+                            "AST": "{:.1f}",
+                            "STL": "{:.1f}",
+                            "BLK": "{:.1f}",
+                            "TO": "{:.1f}",
+                            "FGA": "{:.1f}",
+                            "PPS": "{:.2f}"
+                        }))
+                    else:
+                        st.warning(f"No comparison stats available for {player_name}.")
 
-            # Game-by-game stats
-            player_game_stats = fetch_player_game_stats(player_name)
-            if not player_game_stats.empty:
-                st.subheader(f"📋 {player_name} - Game by Game Statistics")
-                mean_values = player_game_stats.mean(numeric_only=True)
-                mean_values['Game ID'] = 'Average'
-                mean_values['MIN'] = '-'
-                player_game_stats_with_mean = pd.concat([player_game_stats, mean_values.to_frame().T], ignore_index=True)
-                st.dataframe(player_game_stats_with_mean.style.format({
-                    "FG%": "{:.1f}%",
-                    "3P%": "{:.1f}%",
-                    "2P%": "{:.1f}%",
-                    "FT%": "{:.1f}%",
-                    "PPS": "{:.1f}",
-                    "PTS": "{:.1f}",
-                    "REB": "{:.1f}",
-                    "AST": "{:.1f}",
-                    "STL": "{:.1f}",
-                    "BLK": "{:.1f}",
-                    "TO": "{:.1f}"
-                }))
-            else:
-                st.warning(f"No game-by-game stats available for {player_name}.")
+                # Show detailed shot analysis
+                analyze_shot_patterns(player_name)
 
-            player_vs_league_40 = fetch_player_and_league_stats_per_40(player_name)
-            if not player_vs_league_40.empty:
-                st.subheader(f"📊 {player_name} vs. League - Stats per 40 Minutes")
-                st.dataframe(player_vs_league_40.style.format({
-                    "PTS": "{:.1f}",
-                    "REB": "{:.1f}",
-                    "AST": "{:.1f}",
-                    "STL": "{:.1f}",
-                    "BLK": "{:.1f}",
-                    "TO": "{:.1f}",
-                    "FGA": "{:.1f}",
-                    "PPS": "{:.2f}"
-                }))
-            else:
-                st.warning(f"No per-40 stats available for {player_name}.")
 if __name__ == "__main__":
     main()

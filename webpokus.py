@@ -3096,10 +3096,6 @@ def analyze_shot_patterns(player_name):
                 barmode='stack'
             )
             st.plotly_chart(fig_dist)
-
-            # Allow user to select a specific team
-            teams = sorted(df_opponent['opponent_team'].unique())
-            selected_team = st.selectbox("Select Team to View Details", teams)
             
 def create_shot_chart(df_shots, title):
     """Create a shot chart using plotly"""

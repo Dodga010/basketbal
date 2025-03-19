@@ -3101,40 +3101,6 @@ def analyze_shot_patterns(player_name):
             teams = sorted(df_opponent['opponent_team'].unique())
             selected_team = st.selectbox("Select Team to View Details", teams)
             
-            if selected_team:
-                team_shots = df_opponent[df_opponent['opponent_team'] == selected_team]
-                
-                # Shot chart for selected team
-                fig_court = create_shot_chart(
-                    team_shots,
-                    f"Shot Chart Against {selected_team}"
-                )
-                st.plotly_chart(fig_court)
-
-                # Detailed shot type analysis
-                detailed_analysis = team_shots.groupby('shot_sub_type').agg({
-                    'shot_result': ['count', 'mean']
-                }).round(3)
-                
-                detailed_analysis.columns = ['Attempts', 'Success Rate']
-                detailed_analysis = detailed_analysis.sort_values('Attempts', ascending=False)
-                detailed_analysis['Success Rate'] = (detailed_analysis['Success Rate'] * 100).round(1).astype(str) + '%'
-                
-                st.write(f"#### Shot Details Against {selected_team}")
-                st.dataframe(detailed_analysis)
-
-                # Shot success by zone visualization
-                success_by_zone = px.scatter(
-                    team_shots,
-                    x='x_coord',
-                    y='y_coord',
-                    color='shot_result',
-                    title=f"Shot Success by Location Against {selected_team}",
-                    color_discrete_map={1: 'green', 0: 'red'},
-                    labels={'shot_result': 'Shot Result', 'x_coord': 'X Coordinate', 'y_coord': 'Y Coordinate'}
-                )
-                st.plotly_chart(success_by_zone)
-        
 def create_shot_chart(df_shots, title):
     """Create a shot chart using plotly"""
     # Create basketball court

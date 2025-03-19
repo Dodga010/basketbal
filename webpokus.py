@@ -3390,13 +3390,9 @@ def main():
                 st.write("### Shot Distribution Analysis")
                 col_dist1, col_dist2 = st.columns(2)
                 
-                with col_dist1:
-                    # Shot success rate by distance
-                    plot_fg_percentage_with_frequency(player_name)
+                plot_fg_percentage_with_frequency(player_name)
                 
-                with col_dist2:
-                    # Shot distribution comparison with league average
-                    plot_interpolated_distribution(player_name)
+                plot_interpolated_distribution(player_name)
                 
                 # Player stats section
                 st.write("### Player Statistics")

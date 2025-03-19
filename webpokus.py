@@ -2528,7 +2528,7 @@ def generate_advanced_metrics(game_id):
 
 def main():
     st.title("🏀 Basketball Stats Viewer")
-    page = st.sidebar.selectbox("📌 Choose a page", ["Team Season Boxscore", "Head-to-Head Comparison", "Referee Stats", "Shot Chart","Match report", "Four Factors", "Match Detail","Lebron"])
+    page = st.sidebar.selectbox("📌 Choose a page", ["Team Season Boxscore", "Shot Chart","Match report", "Four Factors", "Lebron"])
 
     if page == "Match Detail":
         display_match_detail()

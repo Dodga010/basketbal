@@ -698,8 +698,67 @@ def calculate_interpolated_distribution(df_shots):
     
     return x_smooth, y_smooth
     
+def calculate_fg_percentage_by_distance(df_shots, bin_size=1, window_size=5):
+    """Calculate PPS (Points Per Shot) by distance with 3-point line consideration"""
+    # Calculate distances
+    df_shots["distance"] = df_shots.apply(
+        lambda row: calculate_distance_from_basket(row["x_coord"], row["y_coord"]), 
+        axis=1
+    )
+    df_shots["distance"] = df_shots["distance"].apply(convert_units_to_meters)
+
+    # Function to determine if a shot is a 3-pointer based on court position
+    def is_three_pointer(x, y):
+        distance = np.sqrt((x - 50)**2 + (y - 25)**2)
+        return distance >= 23.75  # NBA 3-point line distance in feet
+
+    # Add shot type classification
+    df_shots["is_three"] = df_shots.apply(lambda row: is_three_pointer(row["x_coord"], row["y_coord"]), axis=1)
+    
+    # Calculate points for each shot (2 or 3 points)
+    df_shots["points"] = df_shots.apply(lambda row: 3 if row["is_three"] and row["shot_result"] == 1 
+                                      else 2 if row["shot_result"] == 1 else 0, axis=1)
+
+    # Create shot zone classification
+    def classify_shot_zone(row):
+        distance = row["distance"]
+        is_three = row["is_three"]
+        
+        if distance <= 1:
+            return 'At Rim'
+        elif distance <= 3:
+            return 'Close Range'
+        elif distance <= 5:
+            return 'Mid Range'
+        elif not is_three:
+            return 'Long Mid'
+        elif distance <= 8:
+            return 'Three Point'
+        else:
+            return 'Deep Three'
+
+    # Apply shot zone classification
+    df_shots["distance_bin"] = df_shots.apply(classify_shot_zone, axis=1)
+
+    # Calculate PPS and counts
+    grouped = df_shots.groupby("distance_bin")
+    pps = grouped["points"].sum() / grouped.size()
+    shot_counts = grouped.size()
+
+    # Define the desired order of zones
+    zone_order = ['At Rim', 'Close Range', 'Mid Range', 'Long Mid', 'Three Point', 'Deep Three']
+    
+    # Reindex based on the desired order, filling any missing categories with 0
+    pps = pps.reindex(zone_order, fill_value=0)
+    shot_counts = shot_counts.reindex(zone_order, fill_value=0)
+
+    # Apply smoothing
+    pps = pps.rolling(window=window_size, min_periods=1, center=True).mean()
+    
+    return pps, shot_counts
+
 def plot_fg_percentage_with_frequency(player_name, window_size=5):
-    """Plot weighted field goal percentage and shot frequency by distance"""
+    """Plot PPS and shot frequency by distance"""
     df_player_shots = fetch_shot_data(player_name)
     df_league_shots = fetch_league_shot_data()
 
@@ -707,38 +766,24 @@ def plot_fg_percentage_with_frequency(player_name, window_size=5):
         st.warning(f"No shot data found for {player_name}.")
         return
 
-    # Calculate standard percentages and counts
-    player_fg_percentage, player_shot_counts = calculate_fg_percentage_by_distance(df_player_shots, window_size=window_size)
-    league_fg_percentage, league_shot_counts = calculate_fg_percentage_by_distance(df_league_shots, window_size=window_size)
-
-    # Calculate weighted percentages
-    total_player_shots = player_shot_counts.sum()
-    total_league_shots = league_shot_counts.sum()
-    
-    # Weight the percentages by shot volume
-    weighted_player_fg = player_fg_percentage * (player_shot_counts / total_player_shots)
-    weighted_league_fg = league_fg_percentage * (league_shot_counts / total_league_shots)
+    # Calculate PPS and counts
+    player_pps, player_shot_counts = calculate_fg_percentage_by_distance(df_player_shots, window_size=window_size)
+    league_pps, league_shot_counts = calculate_fg_percentage_by_distance(df_league_shots, window_size=window_size)
 
     # Create figure
     fig, ax1 = plt.subplots(figsize=(12, 7))
 
-    # Plot weighted field goal percentage
-    ax1.plot(range(len(weighted_player_fg)), weighted_player_fg.values, 
-             color='green', label=f'{player_name} Weighted FG%', linewidth=2)
-    ax1.plot(range(len(weighted_league_fg)), weighted_league_fg.values, 
-             linestyle='--', color='blue', label="League Weighted FG%", linewidth=2)
-    
-    # Add the original unweighted lines with lower opacity
-    ax1.plot(range(len(player_fg_percentage)), player_fg_percentage.values, 
-             color='green', alpha=0.3, linestyle=':', label=f'{player_name} Raw FG%')
-    ax1.plot(range(len(league_fg_percentage)), league_fg_percentage.values, 
-             color='blue', alpha=0.3, linestyle=':', label="League Raw FG%")
+    # Plot PPS
+    ax1.plot(range(len(player_pps)), player_pps.values, 
+             color='green', label=f'{player_name} PPS', linewidth=2)
+    ax1.plot(range(len(league_pps)), league_pps.values, 
+             linestyle='--', color='blue', label="League PPS", linewidth=2)
 
-    # Set y-axis limits to show percentages better
-    ax1.set_ylim(0, max(100, player_fg_percentage.max() * 1.1))
+    # Set y-axis limits
+    ax1.set_ylim(0, max(3, player_pps.max() * 1.1))
 
     ax1.set_xlabel("Shot Zone")
-    ax1.set_ylabel("Field Goal Percentage (%)")
+    ax1.set_ylabel("Points Per Shot (PPS)")
     ax1.set_title(f"Shot Distribution Analysis for {player_name}")
 
     # Plot frequency as bars
@@ -748,8 +793,8 @@ def plot_fg_percentage_with_frequency(player_name, window_size=5):
     ax2.set_ylabel("Number of Shots")
 
     # Set x-ticks to show distance labels
-    ax1.set_xticks(range(len(player_fg_percentage)))
-    ax1.set_xticklabels(player_fg_percentage.index, rotation=45)
+    ax1.set_xticks(range(len(player_pps)))
+    ax1.set_xticklabels(player_pps.index, rotation=45)
 
     # Add value labels on top of bars
     for bar in bars:
@@ -768,11 +813,10 @@ def plot_fg_percentage_with_frequency(player_name, window_size=5):
 
     # Add efficiency metrics
     shot_efficiency = pd.DataFrame({
-        'Zone': player_fg_percentage.index,
-        'Raw FG%': player_fg_percentage.values,
-        'Weighted FG%': weighted_player_fg.values,
+        'Zone': player_pps.index,
+        'PPS': player_pps.values,
         'Shots': player_shot_counts.values,
-        'Shot Distribution %': (player_shot_counts.values / total_player_shots * 100)
+        'Shot Distribution %': (player_shot_counts.values / player_shot_counts.sum() * 100)
     })
     
     fig.tight_layout()
@@ -781,47 +825,22 @@ def plot_fg_percentage_with_frequency(player_name, window_size=5):
     # Display efficiency table
     st.write("### Shot Efficiency Breakdown")
     formatted_efficiency = shot_efficiency.copy()
-    formatted_efficiency['Raw FG%'] = formatted_efficiency['Raw FG%'].round(1).astype(str) + '%'
-    formatted_efficiency['Weighted FG%'] = formatted_efficiency['Weighted FG%'].round(1).astype(str) + '%'
+    formatted_efficiency['PPS'] = formatted_efficiency['PPS'].round(2)
     formatted_efficiency['Shot Distribution %'] = formatted_efficiency['Shot Distribution %'].round(1).astype(str) + '%'
     st.dataframe(formatted_efficiency.set_index('Zone'))
 
-    # Calculate and display overall efficiency metrics
-    overall_raw_fg = (player_fg_percentage * player_shot_counts).sum() / player_shot_counts.sum()
-    overall_weighted_fg = weighted_player_fg.sum()
+    # Calculate and display overall metrics
+    total_points = df_player_shots['points'].sum()
+    total_shots = len(df_player_shots)
+    overall_pps = total_points / total_shots if total_shots > 0 else 0
     
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric("Overall Raw FG%", f"{overall_raw_fg:.1f}%")
+        st.metric("Overall PPS", f"{overall_pps:.2f}")
     with col2:
-        st.metric("Overall Weighted FG%", f"{overall_weighted_fg:.1f}%")
+        st.metric("Total Points", f"{total_points}")
     with col3:
-        st.metric("Total Shots", f"{int(total_player_shots)}")
-	    
-	    
-from scipy.interpolate import UnivariateSpline
-
-def calculate_fg_percentage_by_distance(df_shots, bin_size=1, window_size=5):
-    """Calculate field goal percentage by distance with 3-point line consideration"""
-    # First, let's print the available columns to debug
-    print("Available columns:", df_shots.columns.tolist())
-
-    # Calculate distances
-    df_shots["distance"] = df_shots.apply(
-        lambda row: calculate_distance_from_basket(row["x_coord"], row["y_coord"]), 
-        axis=1
-    )
-    df_shots["distance"] = df_shots["distance"].apply(convert_units_to_meters)
-
-    # Function to determine if a shot is a 3-pointer based on court position
-    def is_three_pointer(x, y):
-        # Convert coordinates to match court dimensions
-        # Assuming 3-point line is approximately 6.75 meters (22 feet) from basket
-        distance = np.sqrt((x - 50)**2 + (y - 25)**2)
-        return distance >= 23.75  # NBA 3-point line distance in feet
-
-    # Add shot type classification
-    df_shots["is_three"] = df_shots.apply(lambda row: is_three_pointer(row["x_coord"], row["y_coord"]), axis=1)
+        st.metric("Total Shots", f"{total_shots}")
 
     # Create shot zone classification
     def classify_shot_zone(row):

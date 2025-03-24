@@ -699,6 +699,7 @@ def calculate_interpolated_distribution(df_shots):
     return x_smooth, y_smooth
     
 def plot_fg_percentage_with_frequency(player_name, window_size=5):
+    """Plot weighted field goal percentage and shot frequency by distance"""
     df_player_shots = fetch_shot_data(player_name)
     df_league_shots = fetch_league_shot_data()
 
@@ -706,43 +707,156 @@ def plot_fg_percentage_with_frequency(player_name, window_size=5):
         st.warning(f"No shot data found for {player_name}.")
         return
 
+    # Calculate standard percentages and counts
     player_fg_percentage, player_shot_counts = calculate_fg_percentage_by_distance(df_player_shots, window_size=window_size)
     league_fg_percentage, league_shot_counts = calculate_fg_percentage_by_distance(df_league_shots, window_size=window_size)
 
-    fig, ax1 = plt.subplots(figsize=(10, 6))
+    # Calculate weighted percentages
+    total_player_shots = player_shot_counts.sum()
+    total_league_shots = league_shot_counts.sum()
+    
+    # Weight the percentages by shot volume
+    weighted_player_fg = player_fg_percentage * (player_shot_counts / total_player_shots)
+    weighted_league_fg = league_fg_percentage * (league_shot_counts / total_league_shots)
 
-    # Plot FG percentage
-    ax1.plot(player_fg_percentage.index, player_fg_percentage.values, color='green', label=f'{player_name} FG%')
-    ax1.plot(league_fg_percentage.index, league_fg_percentage.values, linestyle='--', color='blue', label="League Mean FG%")
-    ax1.set_xlabel("Distance from Basket (meters)")
+    # Create figure
+    fig, ax1 = plt.subplots(figsize=(12, 7))
+
+    # Plot weighted field goal percentage
+    ax1.plot(range(len(weighted_player_fg)), weighted_player_fg.values, 
+             color='green', label=f'{player_name} Weighted FG%', linewidth=2)
+    ax1.plot(range(len(weighted_league_fg)), weighted_league_fg.values, 
+             linestyle='--', color='blue', label="League Weighted FG%", linewidth=2)
+    
+    # Add the original unweighted lines with lower opacity
+    ax1.plot(range(len(player_fg_percentage)), player_fg_percentage.values, 
+             color='green', alpha=0.3, linestyle=':', label=f'{player_name} Raw FG%')
+    ax1.plot(range(len(league_fg_percentage)), league_fg_percentage.values, 
+             color='blue', alpha=0.3, linestyle=':', label="League Raw FG%")
+
+    # Set y-axis limits to show percentages better
+    ax1.set_ylim(0, max(100, player_fg_percentage.max() * 1.1))
+
+    ax1.set_xlabel("Shot Zone")
     ax1.set_ylabel("Field Goal Percentage (%)")
-    ax1.set_title(f"Field Goal Percentage by Distance for {player_name}")
-    ax1.legend(loc='upper left')
+    ax1.set_title(f"Shot Distribution Analysis for {player_name}")
 
-    # Plot the frequency as bars
+    # Plot frequency as bars
     ax2 = ax1.twinx()
-    ax2.bar(player_fg_percentage.index, player_shot_counts, color='gray', alpha=0.3, width=0.5, label='Frequency of Shots')
-    ax2.set_ylabel("Frequency of Shots")
+    bars = ax2.bar(range(len(player_shot_counts)), player_shot_counts.values, 
+            color='gray', alpha=0.3, width=0.5, label='Shot Frequency')
+    ax2.set_ylabel("Number of Shots")
 
+    # Set x-ticks to show distance labels
+    ax1.set_xticks(range(len(player_fg_percentage)))
+    ax1.set_xticklabels(player_fg_percentage.index, rotation=45)
+
+    # Add value labels on top of bars
+    for bar in bars:
+        height = bar.get_height()
+        ax2.text(bar.get_x() + bar.get_width()/2., height,
+                f'{int(height)}',
+                ha='center', va='bottom')
+
+    # Combine legends
+    lines1, labels1 = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper right')
+
+    # Add grid for better readability
+    ax1.grid(True, alpha=0.3)
+
+    # Add efficiency metrics
+    shot_efficiency = pd.DataFrame({
+        'Zone': player_fg_percentage.index,
+        'Raw FG%': player_fg_percentage.values,
+        'Weighted FG%': weighted_player_fg.values,
+        'Shots': player_shot_counts.values,
+        'Shot Distribution %': (player_shot_counts.values / total_player_shots * 100)
+    })
+    
     fig.tight_layout()
     st.pyplot(fig)
+
+    # Display efficiency table
+    st.write("### Shot Efficiency Breakdown")
+    formatted_efficiency = shot_efficiency.copy()
+    formatted_efficiency['Raw FG%'] = formatted_efficiency['Raw FG%'].round(1).astype(str) + '%'
+    formatted_efficiency['Weighted FG%'] = formatted_efficiency['Weighted FG%'].round(1).astype(str) + '%'
+    formatted_efficiency['Shot Distribution %'] = formatted_efficiency['Shot Distribution %'].round(1).astype(str) + '%'
+    st.dataframe(formatted_efficiency.set_index('Zone'))
+
+    # Calculate and display overall efficiency metrics
+    overall_raw_fg = (player_fg_percentage * player_shot_counts).sum() / player_shot_counts.sum()
+    overall_weighted_fg = weighted_player_fg.sum()
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Overall Raw FG%", f"{overall_raw_fg:.1f}%")
+    with col2:
+        st.metric("Overall Weighted FG%", f"{overall_weighted_fg:.1f}%")
+    with col3:
+        st.metric("Total Shots", f"{int(total_player_shots)}")
+	    
 	    
 from scipy.interpolate import UnivariateSpline
 
 def calculate_fg_percentage_by_distance(df_shots, bin_size=1, window_size=5):
-    df_shots["distance"] = df_shots.apply(lambda row: calculate_distance_from_basket(row["x_coord"], row["y_coord"]), axis=1)
+    """Calculate field goal percentage by distance with 3-point line consideration"""
+    # First, let's print the available columns to debug
+    print("Available columns:", df_shots.columns.tolist())
+
+    # Calculate distances
+    df_shots["distance"] = df_shots.apply(
+        lambda row: calculate_distance_from_basket(row["x_coord"], row["y_coord"]), 
+        axis=1
+    )
     df_shots["distance"] = df_shots["distance"].apply(convert_units_to_meters)
 
-    bins = np.arange(0, df_shots["distance"].max() + bin_size, bin_size)
-    df_shots["distance_bin"] = pd.cut(df_shots["distance"], bins, right=False)
+    # Function to determine if a shot is a 3-pointer based on court position
+    def is_three_pointer(x, y):
+        # Convert coordinates to match court dimensions
+        # Assuming 3-point line is approximately 6.75 meters (22 feet) from basket
+        distance = np.sqrt((x - 50)**2 + (y - 25)**2)
+        return distance >= 23.75  # NBA 3-point line distance in feet
 
-    fg_percentage = df_shots.groupby("distance_bin")["shot_result"].mean() * 100
-    fg_percentage.index = fg_percentage.index.categories.left  # Convert index to numeric
+    # Add shot type classification
+    df_shots["is_three"] = df_shots.apply(lambda row: is_three_pointer(row["x_coord"], row["y_coord"]), axis=1)
+
+    # Create shot zone classification
+    def classify_shot_zone(row):
+        distance = row["distance"]
+        is_three = row["is_three"]
+        
+        if distance <= 1:
+            return 'At Rim'
+        elif distance <= 3:
+            return 'Close Range'
+        elif distance <= 5:
+            return 'Mid Range'
+        elif not is_three:
+            return 'Long Mid'
+        elif distance <= 8:
+            return 'Three Point'
+        else:
+            return 'Deep Three'
+
+    # Apply shot zone classification
+    df_shots["distance_bin"] = df_shots.apply(classify_shot_zone, axis=1)
+
+    # Calculate percentages and counts
+    grouped = df_shots.groupby("distance_bin")
+    fg_percentage = grouped["shot_result"].mean() * 100
+    shot_counts = grouped.size()
+
+    # Define the desired order of zones
+    zone_order = ['At Rim', 'Close Range', 'Mid Range', 'Long Mid', 'Three Point', 'Deep Three']
     
-    shot_counts = df_shots.groupby("distance_bin").size()
-    shot_counts.index = shot_counts.index.categories.left  # Convert index to numeric
+    # Reindex based on the desired order, filling any missing categories with 0
+    fg_percentage = fg_percentage.reindex(zone_order, fill_value=0)
+    shot_counts = shot_counts.reindex(zone_order, fill_value=0)
 
-    # Apply moving average for smoothing FG%
+    # Apply smoothing
     fg_percentage = fg_percentage.rolling(window=window_size, min_periods=1, center=True).mean()
     
     return fg_percentage, shot_counts

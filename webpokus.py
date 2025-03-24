@@ -842,44 +842,6 @@ def plot_fg_percentage_with_frequency(player_name, window_size=5):
     with col3:
         st.metric("Total Shots", f"{total_shots}")
 
-    # Create shot zone classification
-    def classify_shot_zone(row):
-        distance = row["distance"]
-        is_three = row["is_three"]
-        
-        if distance <= 1:
-            return 'At Rim'
-        elif distance <= 3:
-            return 'Close Range'
-        elif distance <= 5:
-            return 'Mid Range'
-        elif not is_three:
-            return 'Long Mid'
-        elif distance <= 8:
-            return 'Three Point'
-        else:
-            return 'Deep Three'
-
-    # Apply shot zone classification
-    df_shots["distance_bin"] = df_shots.apply(classify_shot_zone, axis=1)
-
-    # Calculate percentages and counts
-    grouped = df_shots.groupby("distance_bin")
-    fg_percentage = grouped["shot_result"].mean() * 100
-    shot_counts = grouped.size()
-
-    # Define the desired order of zones
-    zone_order = ['At Rim', 'Close Range', 'Mid Range', 'Long Mid', 'Three Point', 'Deep Three']
-    
-    # Reindex based on the desired order, filling any missing categories with 0
-    fg_percentage = fg_percentage.reindex(zone_order, fill_value=0)
-    shot_counts = shot_counts.reindex(zone_order, fill_value=0)
-
-    # Apply smoothing
-    fg_percentage = fg_percentage.rolling(window=window_size, min_periods=1, center=True).mean()
-    
-    return fg_percentage, shot_counts
-
 def plot_interpolated_distribution(player_name):
     df_shots = fetch_shot_data(player_name)
     if df_shots.empty:

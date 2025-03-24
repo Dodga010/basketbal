@@ -1032,7 +1032,7 @@ def generate_shot_chart(player_name, show_heatmap=False, shot_types=None):
 
     # Scale coordinates
     df_shots['x_coord'] = df_shots['x_coord'] * 2.8
-    df_shots['y_coord'] = 261 - (df_shots['y_coord'] * 2.61)
+    df_shots['y_coord'] =(df_shots['y_coord'] * 2.61)
 
     # Create figure
     fig, ax = plt.subplots(figsize=(10, 8))
@@ -2480,7 +2480,7 @@ def plot_match_shot_chart(game_id):
 
     # Convert coordinates to court image scale
     df_shots['x_coord'] = df_shots['x_coord'] * 2.8
-    df_shots['y_coord'] = 261 - (df_shots['y_coord'] * 2.61)
+    df_shots['y_coord'] =(df_shots['y_coord'] * 2.61)
 
     # Load court image
     court_img = mpimg.imread("fiba_courtonly.jpg")
@@ -2713,7 +2713,7 @@ def analyze_shot_patterns(player_name):
 
         # Scale coordinates
         df_shots['x_coord_scaled'] = df_shots['x_coord'] * 2.8
-        df_shots['y_coord_scaled'] = 261 - (df_shots['y_coord'] * 2.61)
+        df_shots['y_coord_scaled'] = (df_shots['y_coord'] * 2.61)
 
         # Plot made shots
         made = df_shots[df_shots['shot_result'] == 1]

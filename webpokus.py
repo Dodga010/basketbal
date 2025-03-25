@@ -11,6 +11,9 @@ import numpy as np
 from scipy.interpolate import UnivariateSpline
 from scipy.ndimage import gaussian_filter1d
 import plotly.graph_objects as go
+from datetime import datetime
+import os
+from collections import defaultdict
 
 # ✅ Define SQLite database path (works locally & online)
 db_path = os.path.join(os.path.dirname(__file__), "database.db")
@@ -3242,9 +3245,518 @@ def create_shot_chart(df_shots, title):
 
     return fig
 
+def get_players_on_court(df_pbp, game_id):
+    """Track which players are on court based on substitutions."""
+    conn = sqlite3.connect(db_path)
+    
+    # Get starting lineups (players marked as starters)
+    starters_query = """
+    SELECT team_id, json_player_id as player_id
+    FROM Players
+    WHERE game_id = ? AND starter = 1;
+    """
+    df_starters = pd.read_sql_query(starters_query, conn, params=(game_id,))
+    conn.close()
+
+    # Initialize dictionaries to track players on court for each team
+    team1_players = set(df_starters[df_starters['team_id'] == 1]['player_id'])
+    team2_players = set(df_starters[df_starters['team_id'] == 2]['player_id'])
+    
+    # List to store players on court for each action
+    players_by_action = []
+    
+    # Process each action
+    for _, row in df_pbp.iterrows():
+        if row['action_type'] == 'substitution':
+            team_id = row['team_id']
+            player_id = row['player_id']
+            sub_type = row['sub_type']
+            
+            if team_id == 1:
+                players = team1_players
+            else:
+                players = team2_players
+                
+            if sub_type == 'in':
+                players.add(player_id)
+            elif sub_type == 'out':
+                players.discard(player_id)
+        
+        # Record current players on court
+        players_by_action.append({
+            'team1_players': sorted(list(team1_players)),
+            'team2_players': sorted(list(team2_players))
+        })
+    
+    return players_by_action
+
+def fetch_pbp_data(game_id):
+    """Fetch play by play data for a specific game."""
+    conn = sqlite3.connect(db_path)
+    query = """
+    SELECT 
+        action_number,
+        period,
+        game_time,
+        action_type,
+        sub_type,
+        team_id,
+        player_id,
+        success,
+        current_score_team1,
+        current_score_team2,
+        lead
+    FROM PlayByPlay
+    WHERE game_id = ?
+    ORDER BY action_number ASC;
+    """
+    try:
+        df = pd.read_sql_query(query, conn, params=(game_id,))
+    except Exception as e:
+        st.error(f"Error fetching play-by-play data: {str(e)}")
+        df = pd.DataFrame()
+    finally:
+        conn.close()
+    return df
+
+def get_player_names_dict(game_id):
+    """Create a dictionary mapping (team_id, player_id) tuples to player names."""
+    conn = sqlite3.connect(db_path)
+    query = """
+    SELECT team_id, 
+           json_player_id as player_id, 
+           first_name || ' ' || last_name as player_name
+    FROM Players
+    WHERE game_id = ?;
+    """
+    df_players = pd.read_sql_query(query, conn, params=(game_id,))
+    conn.close()
+    
+    # Create dictionary with (team_id, player_id) as key
+    return {(row['team_id'], row['player_id']): row['player_name'] 
+            for _, row in df_players.iterrows()}
+
+def analyze_five_player_segments(game_id):
+    """Analyze segments where specific combinations of five players played together."""
+    conn = sqlite3.connect(db_path)
+    
+    # Get starting lineups with team_id
+    starters_query = """
+    SELECT team_id, json_player_id as player_id
+    FROM Players
+    WHERE game_id = ? AND starter = 1
+    ORDER BY team_id;
+    """
+    df_starters = pd.read_sql_query(starters_query, conn, params=(game_id,))
+    
+    # Get all substitutions with action numbers and lead
+    subs_query = """
+    SELECT action_number, team_id, player_id, sub_type, lead
+    FROM PlayByPlay
+    WHERE game_id = ? AND action_type = 'substitution'
+    ORDER BY action_number;
+    """
+    df_subs = pd.read_sql_query(subs_query, conn, params=(game_id,))
+    
+    # Get all action numbers and leads
+    leads_query = """
+    SELECT action_number, lead
+    FROM PlayByPlay
+    WHERE game_id = ?
+    ORDER BY action_number;
+    """
+    df_leads = pd.read_sql_query(leads_query, conn, params=(game_id,))
+    
+    # Get last action number and lead
+    last_action_query = """
+    SELECT MAX(action_number) as last_action, lead as final_lead
+    FROM PlayByPlay
+    WHERE game_id = ?;
+    """
+    last_action_data = pd.read_sql_query(last_action_query, conn, params=(game_id,)).iloc[0]
+    last_action = last_action_data['last_action']
+    
+    conn.close()
+
+    # Get player names dictionary
+    player_names = get_player_names_dict(game_id)
+
+    # Initialize segments tracking
+    segments = []
+    
+    # Initialize current fives for both teams using (team_id, player_id) tuples
+    current_five = {
+        1: set((1, pid) for pid in df_starters[df_starters['team_id'] == 1]['player_id']),
+        2: set((2, pid) for pid in df_starters[df_starters['team_id'] == 2]['player_id'])
+    }
+    
+    # Add initial segment (starters)
+    if len(current_five[1]) == 5 and len(current_five[2]) == 5:
+        initial_lead = df_leads.iloc[0]['lead'] if not df_leads.empty else 0
+        segments.append({
+            'start_action': 1,
+            'end_action': None,
+            'team1_five': [player_names.get((1, pid), f"Player {pid} (Team 1)") 
+                          for _, pid in sorted(current_five[1])],
+            'team2_five': [player_names.get((2, pid), f"Player {pid} (Team 2)") 
+                          for _, pid in sorted(current_five[2])],
+            'start_lead': initial_lead,
+            'end_lead': None
+        })
+    
+    # Process substitutions
+    pending_subs = {1: False, 2: False}
+    
+    for _, sub in df_subs.iterrows():
+        team_id = sub['team_id']
+        player_id = sub['player_id']
+        sub_type = sub['sub_type']
+        action_num = sub['action_number']
+        current_lead = sub['lead']
+        
+        # Update the current five using (team_id, player_id) tuple
+        if sub_type == 'in':
+            current_five[team_id].add((team_id, player_id))
+            pending_subs[team_id] = True
+        elif sub_type == 'out':
+            current_five[team_id].discard((team_id, player_id))
+            pending_subs[team_id] = True
+        
+        # Check if we have complete fives after substitutions
+        if len(current_five[team_id]) == 5 and pending_subs[team_id]:
+            pending_subs[team_id] = False
+            
+            # If both teams have complete fives, create new segment
+            if len(current_five[1]) == 5 and len(current_five[2]) == 5:
+                # Close previous segment
+                if segments:
+                    segments[-1]['end_action'] = action_num - 1
+                    segments[-1]['end_lead'] = current_lead
+                
+                # Start new segment
+                segments.append({
+                    'start_action': action_num,
+                    'end_action': None,
+                    'team1_five': [player_names.get((1, pid), f"Player {pid} (Team 1)") 
+                                 for _, pid in sorted(current_five[1])],
+                    'team2_five': [player_names.get((2, pid), f"Player {pid} (Team 2)") 
+                                 for _, pid in sorted(current_five[2])],
+                    'start_lead': current_lead,
+                    'end_lead': None
+                })
+    
+    # Close the last segment
+    if segments:
+        segments[-1]['end_action'] = last_action
+        segments[-1]['end_lead'] = last_action_data['final_lead']
+    
+    return segments
+
+def display_five_player_segments():
+    st.title("📊 Five Player Segments Analysis")
+
+    # Add timestamp and user info
+    st.markdown(f"*Analysis generated on: 2025-03-25 21:41:55 UTC*")
+    st.markdown(f"*Generated by: Dodga010*")
+
+    st.subheader("🏀 Select Match")
+    match_dict = fetch_matches()
+    selected_match_name = st.selectbox("Select a match:", list(match_dict.keys()))
+    selected_match = match_dict[selected_match_name]
+    
+    if selected_match:
+        # Get five player segments
+        segments = analyze_five_player_segments(selected_match)
+        
+        if not segments:
+            st.warning("No complete five-player segments found for this game.")
+            return
+        
+        # Convert segments to DataFrame
+        df_segments = pd.DataFrame(segments)
+        
+        # Calculate duration and plus/minus for each segment
+        df_segments['Duration'] = df_segments['end_action'] - df_segments['start_action'] + 1
+        df_segments['Plus_Minus'] = df_segments['end_lead'] - df_segments['start_lead']
+        
+        # Format five player combinations as strings
+        df_segments['Team 1 Five'] = df_segments['team1_five'].apply(lambda x: '\n'.join(x))
+        df_segments['Team 2 Five'] = df_segments['team2_five'].apply(lambda x: '\n'.join(x))
+        
+        # Display segments
+        st.subheader("🏃‍♂️ Five Player Segments")
+        
+        display_df = df_segments[[
+            'start_action',
+            'end_action',
+            'Duration',
+            'Team 1 Five',
+            'Team 2 Five',
+            'start_lead',
+            'end_lead',
+            'Plus_Minus'
+        ]].copy()
+        
+        st.dataframe(display_df, hide_index=True)
+        
+        # Display summary statistics for each team
+        st.subheader("📊 Team Analysis")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.write("### Team 1 (Home) Lineups")
+            
+            # Aggregate stats for Team 1 lineups
+            team1_stats = (df_segments.groupby('Team 1 Five')
+                         .agg({
+                             'Duration': 'sum',
+                             'Plus_Minus': 'sum'
+                         })
+                         .sort_values('Duration', ascending=False))
+            
+            team1_stats = team1_stats.reset_index()
+            team1_stats.columns = ['Five Players', 'Actions Played', 'Plus/Minus']
+            st.dataframe(team1_stats, hide_index=True)
+        
+        with col2:
+            st.write("### Team 2 (Away) Lineups")
+            
+            # Aggregate stats for Team 2 lineups
+            team2_stats = (df_segments.groupby('Team 2 Five')
+                         .agg({
+                             'Duration': 'sum',
+                             'Plus_Minus': lambda x: -x.sum()  # Invert plus/minus for away team
+                         })
+                         .sort_values('Duration', ascending=False))
+            
+            team2_stats = team2_stats.reset_index()
+            team2_stats.columns = ['Five Players', 'Actions Played', 'Plus/Minus']
+            st.dataframe(team2_stats, hide_index=True)
+        
+        # Add most effective lineups
+        st.subheader("🌟 Most Effective Lineups")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.write("### Team 1 (Home) - By Plus/Minus")
+            team1_effective = team1_stats.sort_values('Plus/Minus', ascending=False)
+            st.dataframe(team1_effective, hide_index=True)
+        
+        with col2:
+            st.write("### Team 2 (Away) - By Plus/Minus")
+            team2_effective = team2_stats.sort_values('Plus/Minus', ascending=False)
+            st.dataframe(team2_effective, hide_index=True)
+
+def get_teams():
+    """Get list of all teams from the database."""
+    conn = sqlite3.connect(db_path)
+    query = """
+    SELECT DISTINCT team_id, name 
+    FROM Teams 
+    ORDER BY team_id;
+    """
+    teams = pd.read_sql_query(query, conn)
+    conn.close()
+    return dict(zip(teams['team_id'], teams['name']))
+
+from collections import defaultdict
+
+def analyze_all_team_lineups():
+    """Analyze all lineups across all games, combining home and away appearances."""
+    conn = sqlite3.connect(db_path)
+    games_query = "SELECT DISTINCT game_id FROM PlayByPlay;"
+    games = pd.read_sql_query(games_query, conn)
+    conn.close()
+
+    all_lineup_stats = []
+    all_players = set()
+    player_impact_stats = defaultdict(lambda: {'total_plus_minus': 0, 'total_actions': 0, 'lineups': 0})
+    lineup_games = defaultdict(set)  # Track unique games for each lineup
+    
+    for game_id in games['game_id']:
+        segments = analyze_five_player_segments(game_id)
+        if segments:
+            df_segments = pd.DataFrame(segments)
+            df_segments['Duration'] = df_segments['end_action'] - df_segments['start_action'] + 1
+            
+            # Process both home and away lineups
+            for team_num in [1, 2]:
+                team_stats = df_segments.copy()
+                team_stats['lineup_str'] = team_stats[f'team{team_num}_five'].apply(lambda x: ' | '.join(sorted(x)))
+                team_stats['Plus_Minus'] = team_stats['end_lead'] - team_stats['start_lead']
+                if team_num == 2:
+                    team_stats['Plus_Minus'] = -team_stats['Plus_Minus']
+                
+                # Update player impact stats
+                for _, row in team_stats.iterrows():
+                    lineup_str = row['lineup_str']
+                    lineup_games[lineup_str].add(game_id)  # Add game_id to this lineup's set
+                    
+                    for player in row[f'team{team_num}_five']:
+                        player_impact_stats[player]['total_plus_minus'] += row['Plus_Minus']
+                        player_impact_stats[player]['total_actions'] += row['Duration']
+                        player_impact_stats[player]['lineups'] += 1
+                
+                for lineup in df_segments[f'team{team_num}_five']:
+                    all_players.update(lineup)
+                
+                game_stats = team_stats.groupby('lineup_str').agg({
+                    'Duration': 'sum',
+                    'Plus_Minus': 'sum'
+                }).reset_index()
+                
+                game_stats['game_id'] = game_id
+                all_lineup_stats.append(game_stats)
+    
+    if not all_lineup_stats:
+        return None, [], {}
+        
+    # Combine all games stats
+    all_stats = pd.concat(all_lineup_stats, ignore_index=True)
+    
+    # Calculate aggregate statistics
+    lineup_stats = all_stats.groupby('lineup_str').agg({
+        'Duration': 'sum',
+        'Plus_Minus': 'sum'
+    }).reset_index()
+    
+    # Add the actual games played count from our tracking
+    lineup_stats['Games Played'] = lineup_stats['lineup_str'].apply(lambda x: len(lineup_games[x]))
+    
+    # Add reliability score (more actions = more reliable)
+    lineup_stats['Reliability'] = (lineup_stats['Duration'] / lineup_stats['Duration'].max() * 100).round(1)
+    
+    # Calculate player impact per 100 possessions
+    player_impact = {
+        player: {
+            'Plus_Minus_per_100': round((stats['total_plus_minus'] / stats['total_actions']) * 100, 2),
+            'Total_Actions': stats['total_actions'],
+            'Num_Lineups': stats['lineups'],
+            'Games_Played': len(set(game_id for lineup in lineup_games 
+                                  if player in lineup.split(' | ') 
+                                  for game_id in lineup_games[lineup]))
+        }
+        for player, stats in player_impact_stats.items()
+    }
+    
+    # Rename columns for display
+    lineup_stats = lineup_stats.rename(columns={
+        'lineup_str': 'Lineup',
+        'Duration': 'Total Actions',
+        'Plus_Minus': 'Plus/Minus'
+    })
+    
+    # Calculate additional metrics
+    lineup_stats['Avg Plus/Minus per Game'] = (lineup_stats['Plus/Minus'] / lineup_stats['Games Played']).round(2)
+    lineup_stats['Plus/Minus per 100'] = ((lineup_stats['Plus/Minus'] / lineup_stats['Total Actions']) * 100).round(2)
+    
+    # Add total games analyzed
+    total_games = len(games)
+    
+    # Arrange columns in desired order
+    lineup_stats = lineup_stats[[
+        'Lineup', 'Total Actions', 'Games Played', 'Plus/Minus', 
+        'Avg Plus/Minus per Game', 'Plus/Minus per 100', 'Reliability'
+    ]]
+    
+    return lineup_stats, sorted(list(all_players)), player_impact, total_games
+
+def display_team_analysis():
+    st.title("📊 Lineup Analysis")
+    
+    # Add timestamp and user info
+    st.markdown("*Analysis generated on: 2025-03-25 22:41:00*")
+    st.markdown("*Generated by: Dodga010*")
+    
+    stats, all_players, player_impact, total_games = analyze_all_team_lineups()
+    
+    if stats is None:
+        st.warning("No lineup data available.")
+        return
+        
+    st.info(f"Analyzing data from {total_games} total games")
+    
+    # Add filters
+    col1, col2 = st.columns(2)
+    with col1:
+        min_actions = st.slider("Minimum Actions Filter", 
+                              min_value=0, 
+                              max_value=int(stats['Total Actions'].max()), 
+                              value=20,
+                              help="Filter out lineups with fewer actions to improve reliability")
+    
+    with col2:
+        min_games = st.slider("Minimum Games Played", 
+                            min_value=1, 
+                            max_value=int(stats['Games Played'].max()), 
+                            value=2,
+                            help="Filter lineups based on minimum games played")
+    
+    # Player selection
+    st.subheader("🏀 Select Players to Analyze")
+    selected_players = st.multiselect(
+        "Choose players to see lineups containing them:",
+        options=all_players
+    )
+    
+    # Apply filters
+    filtered_stats = stats[
+        (stats['Total Actions'] >= min_actions) & 
+        (stats['Games Played'] >= min_games)
+    ]
+    
+    if selected_players:
+        filtered_stats = filtered_stats[filtered_stats['Lineup'].apply(
+            lambda x: all(player in x for player in selected_players)
+        )]
+        
+        if filtered_stats.empty:
+            st.warning("No lineups found matching the criteria.")
+            return
+        
+        st.write(f"### All Lineups Containing: {', '.join(selected_players)}")
+        st.dataframe(filtered_stats, hide_index=True)
+        
+        # Show player impact stats
+        st.subheader("🏀 Player Impact Analysis")
+        player_stats = []
+        for player in selected_players:
+            if player in player_impact:
+                stats = player_impact[player]
+                player_stats.append({
+                    'Player': player,
+                    'Plus/Minus per 100': stats['Plus_Minus_per_100'],
+                    'Total Actions': stats['Total_Actions'],
+                    'Games Played': stats['Games_Played'],
+                    'Different Lineups': stats['Num_Lineups']
+                })
+        
+        if player_stats:
+            st.write("Individual Player Impact:")
+            player_df = pd.DataFrame(player_stats)
+            st.dataframe(player_df, hide_index=True)
+        
+        # Summary statistics
+        st.subheader("📈 Summary Statistics")
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric("Total Lineups Found", len(filtered_stats))
+        with col2:
+            st.metric("Avg Games per Lineup", 
+                     round(filtered_stats['Games Played'].mean(), 1))
+        with col3:
+            st.metric("Average Plus/Minus", 
+                     round(filtered_stats['Plus/Minus'].mean(), 1))
+        with col4:
+            st.metric("Max Games by Lineup", 
+                     int(filtered_stats['Games Played'].max()))
+
 def main():
     st.title("🏀 Basketball Stats Viewer")
-    page = st.sidebar.selectbox("📌 Choose a page", ["Team Season Boxscore", "Shot Chart","Match report", "Four Factors", "Lebron"])
+    page = st.sidebar.selectbox("📌 Choose a page", ["Team Season Boxscore", "Shot Chart","Match report", "Four Factors", "Lebron", "Play by Play", "Match Detail", "Five Player Segments", "Team Lineup Analysis"])
 
     if page == "Match Detail":
         display_match_detail()
@@ -3289,7 +3801,11 @@ def main():
                 st.subheader(f"📈 Score Lead Progression - Full Game")
                 plot_score_lead_full_game(selected_game_id)
 
-
+    elif page == "Five Player Segments":
+        display_five_player_segments()
+    # ... rest of your main function ...
+    elif page == "Team Lineup Analysis":
+        display_team_analysis()
     elif page == "Four Factors":
         df = fetch_team_data()
         if df.empty:

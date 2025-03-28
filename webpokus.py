@@ -5601,6 +5601,1163 @@ def fetch_teams():
     conn.close()
     return teams
 
+import os
+import sqlite3
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import streamlit as st
+from datetime import datetime
+
+# Define SQLite database path
+db_path = os.path.join(os.path.dirname(__file__), "database.db")
+
+def analyze_advanced_metrics(team1_name, team2_name):
+    """
+    Calculate and compare advanced basketball metrics between two teams
+    
+    Parameters:
+    -----------
+    team1_name : str
+        Name of first team to compare
+    team2_name : str
+        Name of second team to compare
+    
+    Returns:
+    --------
+    dict
+        Dictionary containing all advanced metrics comparison
+    """
+    # Connect to database
+    conn = sqlite3.connect(db_path)
+    
+    # Query raw data needed for calculations
+    query = """
+    SELECT 
+        name AS team_name,
+        AVG(p1_score + p2_score + p3_score + p4_score) AS avg_points,
+        AVG(field_goals_made) AS avg_fg_made,
+        AVG(field_goals_attempted) AS avg_fg_attempted,
+        AVG(field_goal_percentage) AS avg_fg_pct,
+        AVG(three_pointers_made) AS avg_3p_made,
+        AVG(three_pointers_attempted) AS avg_3p_attempted,
+        AVG(three_point_percentage) AS avg_3p_pct,
+        AVG(free_throws_made) AS avg_ft_made,
+        AVG(free_throws_attempted) AS avg_ft_attempted,
+        AVG(rebounds_total) AS avg_rebounds,
+        AVG(rebounds_offensive) AS avg_off_rebounds,
+        AVG(rebounds_defensive) AS avg_def_rebounds,
+        AVG(assists) AS avg_assists,
+        AVG(turnovers) AS avg_turnovers,
+        AVG(steals) AS avg_steals,
+        AVG(blocks) AS avg_blocks,
+        AVG(fouls_total) AS avg_fouls,
+        AVG(field_goals_made + 0.5 * three_pointers_made) AS avg_efg_numerator,
+        COUNT(DISTINCT game_id) AS games_played
+    FROM Teams
+    WHERE name IN (?, ?)
+    GROUP BY name
+    """
+    
+    df = pd.read_sql_query(query, conn, params=(team1_name, team2_name))
+    
+    # Get average opponent stats for each team
+    opponent_query = """
+    WITH team_games AS (
+        SELECT 
+            t1.game_id,
+            t1.name AS team_name,
+            t2.name AS opponent_name,
+            t2.p1_score + t2.p2_score + t2.p3_score + t2.p4_score AS opponent_score,
+            t2.field_goals_made AS opponent_fg_made,
+            t2.field_goals_attempted AS opponent_fg_attempted,
+            t2.three_pointers_made AS opponent_3p_made,
+            t2.three_pointers_attempted AS opponent_3p_attempted,
+            t2.rebounds_total AS opponent_rebounds,
+            t2.rebounds_offensive AS opponent_off_rebounds,
+            t2.rebounds_defensive AS opponent_def_rebounds,
+            t2.assists AS opponent_assists,
+            t2.turnovers AS opponent_turnovers,
+            t2.steals AS opponent_steals,
+            t2.blocks AS opponent_blocks
+        FROM Teams t1
+        JOIN Teams t2 ON t1.game_id = t2.game_id AND t1.tm != t2.tm
+        WHERE t1.name IN (?, ?)
+    )
+    SELECT 
+        team_name,
+        AVG(opponent_score) AS avg_opponent_points,
+        AVG(opponent_fg_made) AS avg_opponent_fg_made,
+        AVG(opponent_fg_attempted) AS avg_opponent_fg_attempted,
+        AVG(opponent_3p_made) AS avg_opponent_3p_made,
+        AVG(opponent_3p_attempted) AS avg_opponent_3p_attempted,
+        AVG(opponent_rebounds) AS avg_opponent_rebounds,
+        AVG(opponent_off_rebounds) AS avg_opponent_off_rebounds,
+        AVG(opponent_def_rebounds) AS avg_opponent_def_rebounds,
+        AVG(opponent_assists) AS avg_opponent_assists,
+        AVG(opponent_turnovers) AS avg_opponent_turnovers,
+        AVG(opponent_steals) AS avg_opponent_steals,
+        AVG(opponent_blocks) AS avg_opponent_blocks
+    FROM team_games
+    GROUP BY team_name
+    """
+    
+    opponent_df = pd.read_sql_query(opponent_query, conn, params=(team1_name, team2_name))
+    
+    # Close connection
+    conn.close()
+    
+    if df.empty or len(df) < 2 or opponent_df.empty or len(opponent_df) < 2:
+        return None
+    
+    # Convert DFs to dictionaries for easier access
+    team1_stats = df[df['team_name'] == team1_name].iloc[0].to_dict()
+    team2_stats = df[df['team_name'] == team2_name].iloc[0].to_dict()
+    
+    team1_opp = opponent_df[opponent_df['team_name'] == team1_name].iloc[0].to_dict()
+    team2_opp = opponent_df[opponent_df['team_name'] == team2_name].iloc[0].to_dict()
+    
+    # Calculate advanced metrics
+    team1_metrics = calculate_team_metrics(team1_stats, team1_opp)
+    team2_metrics = calculate_team_metrics(team2_stats, team2_opp)
+    
+    # Compare metrics and determine advantages
+    comparisons = {}
+    
+    # Loop through all metrics in team1_metrics (should be same as team2_metrics)
+    for metric, value in team1_metrics.items():
+        team2_value = team2_metrics[metric]
+        diff = value - team2_value
+        
+        # Determine if higher is better (most metrics - higher is better, except for defensive metrics)
+        is_higher_better = True
+        if metric in ['defensive_rating', 'opponent_efg', 'turnover_rate']:
+            is_higher_better = False
+        
+        better_team = team1_name if (diff > 0 and is_higher_better) or (diff < 0 and not is_higher_better) else team2_name
+        
+        comparisons[metric] = {
+            'team1_value': value,
+            'team2_value': team2_value,
+            'difference': diff,
+            'better_team': better_team,
+            'is_significant': abs(diff) > (0.05 * max(abs(value), abs(team2_value), 0.0001)) # 5% difference threshold
+        }
+    
+    return {
+        'team1_name': team1_name,
+        'team1_metrics': team1_metrics,
+        'team2_name': team2_name,
+        'team2_metrics': team2_metrics,
+        'comparisons': comparisons
+    }
+
+def calculate_team_metrics(team_stats, opponent_stats):
+    """Calculate advanced basketball metrics for a team"""
+    
+    # Estimated pace calculation (per 40 minutes)
+    avg_pace = (team_stats['avg_fg_attempted'] + 0.44 * team_stats['avg_ft_attempted'] + team_stats['avg_turnovers'] 
+              + opponent_stats['avg_opponent_fg_attempted'] + 0.44 * opponent_stats['avg_opponent_fg_attempted'] 
+              + opponent_stats['avg_opponent_turnovers'])
+    
+    # Offensive and defensive ratings (points per 100 possessions)
+    possessions = team_stats['avg_fg_attempted'] + team_stats['avg_turnovers'] + 0.44 * team_stats['avg_ft_attempted'] - team_stats['avg_off_rebounds']
+    
+    offensive_rating = 100 * team_stats['avg_points'] / possessions if possessions > 0 else 0
+    defensive_rating = 100 * opponent_stats['avg_opponent_points'] / possessions if possessions > 0 else 0
+    
+    # Net rating
+    net_rating = offensive_rating - defensive_rating
+    
+    # True shooting percentage
+    true_shooting_pct = team_stats['avg_points'] / (2 * (team_stats['avg_fg_attempted'] + 0.44 * team_stats['avg_ft_attempted'])) if (team_stats['avg_fg_attempted'] + 0.44 * team_stats['avg_ft_attempted']) > 0 else 0
+    
+    # Effective field goal percentage
+    efg_pct = team_stats['avg_efg_numerator'] / team_stats['avg_fg_attempted'] if team_stats['avg_fg_attempted'] > 0 else 0
+    
+    # Opponent effective field goal percentage
+    opponent_efg = (opponent_stats['avg_opponent_fg_made'] + 0.5 * opponent_stats['avg_opponent_3p_made']) / opponent_stats['avg_opponent_fg_attempted'] if opponent_stats['avg_opponent_fg_attempted'] > 0 else 0
+    
+    # Assist ratio = Assists / (FGA + FTA + Turnovers)
+    assist_ratio = 100 * team_stats['avg_assists'] / (team_stats['avg_fg_attempted'] + team_stats['avg_ft_attempted'] + team_stats['avg_turnovers']) if (team_stats['avg_fg_attempted'] + team_stats['avg_ft_attempted'] + team_stats['avg_turnovers']) > 0 else 0
+    
+    # Turnover rate
+    turnover_rate = 100 * team_stats['avg_turnovers'] / (team_stats['avg_fg_attempted'] + 0.44 * team_stats['avg_ft_attempted'] + team_stats['avg_turnovers']) if (team_stats['avg_fg_attempted'] + 0.44 * team_stats['avg_ft_attempted'] + team_stats['avg_turnovers']) > 0 else 0
+    
+    # Assist to turnover ratio
+    ast_to_ratio = team_stats['avg_assists'] / team_stats['avg_turnovers'] if team_stats['avg_turnovers'] > 0 else 0
+    
+    # Defensive rebound percentage
+    def_reb_pct = 100 * team_stats['avg_def_rebounds'] / (team_stats['avg_def_rebounds'] + opponent_stats['avg_opponent_off_rebounds']) if (team_stats['avg_def_rebounds'] + opponent_stats['avg_opponent_off_rebounds']) > 0 else 0
+    
+    # Offensive rebound percentage
+    off_reb_pct = 100 * team_stats['avg_off_rebounds'] / (team_stats['avg_off_rebounds'] + opponent_stats['avg_opponent_def_rebounds']) if (team_stats['avg_off_rebounds'] + opponent_stats['avg_opponent_def_rebounds']) > 0 else 0
+    
+    # Total rebound percentage
+    total_reb_pct = 100 * team_stats['avg_rebounds'] / (team_stats['avg_rebounds'] + opponent_stats['avg_opponent_rebounds']) if (team_stats['avg_rebounds'] + opponent_stats['avg_opponent_rebounds']) > 0 else 0
+    
+    # Steal percentage
+    steal_pct = 100 * team_stats['avg_steals'] / possessions if possessions > 0 else 0
+    
+    # Block percentage
+    block_pct = 100 * team_stats['avg_blocks'] / opponent_stats['avg_opponent_fg_attempted'] if opponent_stats['avg_opponent_fg_attempted'] > 0 else 0
+    
+    # Points per shot
+    pts_per_shot = team_stats['avg_points'] / team_stats['avg_fg_attempted'] if team_stats['avg_fg_attempted'] > 0 else 0
+    
+    return {
+        'pace': avg_pace,
+        'offensive_rating': offensive_rating,
+        'defensive_rating': defensive_rating,
+        'net_rating': net_rating,
+        'true_shooting_pct': true_shooting_pct * 100,  # Convert to percentage
+        'efg_pct': efg_pct * 100,  # Convert to percentage
+        'opponent_efg': opponent_efg * 100,  # Convert to percentage
+        'assist_ratio': assist_ratio,
+        'turnover_rate': turnover_rate,
+        'ast_to_ratio': ast_to_ratio,
+        'def_reb_pct': def_reb_pct,
+        'off_reb_pct': off_reb_pct,
+        'total_reb_pct': total_reb_pct,
+        'steal_pct': steal_pct,
+        'block_pct': block_pct,
+        'pts_per_shot': pts_per_shot
+    }
+
+def display_advanced_metrics_analysis():
+    """Display advanced metrics analysis in Streamlit"""
+    st.header("📊 Advanced Metrics Analysis")
+    
+    # Get teams for comparison (assuming these are already selected)
+    team1 = st.session_state.get("team1")
+    team2 = st.session_state.get("team2")
+    
+    if not team1 or not team2:
+        st.warning("Please select teams for comparison first.")
+        return
+    
+    # Run advanced metrics analysis
+    with st.spinner("Calculating advanced metrics..."):
+        metrics_results = analyze_advanced_metrics(team1, team2)
+    
+    if not metrics_results:
+        st.warning("Insufficient data to calculate advanced metrics.")
+        return
+    
+    # Display metrics in categories
+    metric_categories = {
+        "Efficiency Metrics": [
+            ("offensive_rating", "Offensive Rating", "Points per 100 possessions"),
+            ("defensive_rating", "Defensive Rating", "Points allowed per 100 possessions"),
+            ("net_rating", "Net Rating", "Off. Rating - Def. Rating"),
+            ("true_shooting_pct", "True Shooting %", "Accounts for FG, 3PT, FT"),
+            ("efg_pct", "Effective FG%", "Adjusts for 3PT value"),
+            ("pts_per_shot", "Points Per Shot", "Total points / FGA")
+        ],
+        "Possession Metrics": [
+            ("pace", "Pace", "Estimated possessions per 40 minutes"),
+            ("assist_ratio", "Assist Ratio", "% of possessions ending in assist"),
+            ("turnover_rate", "Turnover Rate", "% of possessions ending in turnover"),
+            ("ast_to_ratio", "AST/TO Ratio", "Assists per turnover")
+        ],
+        "Rebounding Metrics": [
+            ("def_reb_pct", "Defensive Rebound %", "% of available def. rebounds secured"),
+            ("off_reb_pct", "Offensive Rebound %", "% of available off. rebounds secured"),
+            ("total_reb_pct", "Total Rebound %", "% of all available rebounds secured")
+        ],
+        "Defensive Metrics": [
+            ("opponent_efg", "Opponent eFG%", "Opponent's effective field goal %"),
+            ("steal_pct", "Steal %", "% of opponent possessions ending in steal"),
+            ("block_pct", "Block %", "% of opponent FGA blocked")
+        ]
+    }
+    
+    # For each category, create a section
+    for category, metrics in metric_categories.items():
+        st.subheader(category)
+        
+        # Create columns for metric name, team1, team2, better team
+        columns = ["Metric", team1, team2, "Better Team"]
+        data = []
+        
+        for metric_id, metric_name, tooltip in metrics:
+            if metric_id in metrics_results['comparisons']:
+                comparison = metrics_results['comparisons'][metric_id]
+                team1_value = comparison['team1_value']
+                team2_value = comparison['team2_value']
+                better_team = comparison['better_team']
+                
+                # Format numbers appropriately
+                if metric_id in ['offensive_rating', 'defensive_rating', 'net_rating']:
+                    team1_formatted = f"{team1_value:.1f}"
+                    team2_formatted = f"{team2_value:.1f}"
+                else:
+                    team1_formatted = f"{team1_value:.1f}%"
+                    team2_formatted = f"{team2_value:.1f}%"
+                
+                data.append([
+                    f"{metric_name} ({tooltip})",
+                    team1_formatted,
+                    team2_formatted,
+                    better_team
+                ])
+        
+        # Create DataFrame and display as table
+        if data:
+            df = pd.DataFrame(data, columns=columns)
+            st.table(df.set_index("Metric"))
+        else:
+            st.info(f"No {category.lower()} data available.")
+    
+    # Create visualization for key metrics
+    st.subheader("🔍 Key Metrics Comparison")
+    
+    key_metrics = [
+        ('offensive_rating', 'Offensive Rating'),
+        ('defensive_rating', 'Defensive Rating'),
+        ('net_rating', 'Net Rating'),
+        ('true_shooting_pct', 'True Shooting %'),
+        ('efg_pct', 'Effective FG%'),
+        ('ast_to_ratio', 'AST/TO Ratio')
+    ]
+    
+    # Prepare data for bar chart
+    metric_names = [name for _, name in key_metrics]
+    team1_values = [metrics_results['team1_metrics'][metric] for metric, _ in key_metrics]
+    team2_values = [metrics_results['team2_metrics'][metric] for metric, _ in key_metrics]
+    
+    # Create DataFrame for plotting
+    plot_df = pd.DataFrame({
+        'Metric': metric_names,
+        team1: team1_values,
+        team2: team2_values
+    })
+    
+    # Melt DataFrame for easier plotting
+    plot_df_melted = pd.melt(plot_df, id_vars=['Metric'], var_name='Team', value_name='Value')
+    
+    # Create bar chart
+    fig, ax = plt.subplots(figsize=(10, 6))
+    sns.barplot(data=plot_df_melted, x='Metric', y='Value', hue='Team', palette=['blue', 'red'])
+    plt.xticks(rotation=45)
+    plt.title('Key Advanced Metrics Comparison')
+    plt.tight_layout()
+    
+    st.pyplot(fig)
+    
+    # Interpretation and insights
+    st.subheader("📝 Analysis Summary")
+    
+    # Count significant advantages
+    team1_advantages = sum(1 for comp in metrics_results['comparisons'].values() 
+                          if comp['better_team'] == team1 and comp['is_significant'])
+    team2_advantages = sum(1 for comp in metrics_results['comparisons'].values() 
+                          if comp['better_team'] == team2 and comp['is_significant'])
+    
+    st.write(f"**{team1}** has significant advantages in **{team1_advantages}** advanced metrics.")
+    st.write(f"**{team2}** has significant advantages in **{team2_advantages}** advanced metrics.")
+    
+    # Highlight particular strengths
+    st.write("### Key Strengths")
+    
+    # Offensive strengths
+    offensive_metrics = ['offensive_rating', 'true_shooting_pct', 'efg_pct', 'pts_per_shot']
+    team1_off_adv = [metric for metric in offensive_metrics if metric in metrics_results['comparisons'] and
+                     metrics_results['comparisons'][metric]['better_team'] == team1 and
+                     metrics_results['comparisons'][metric]['is_significant']]
+    
+    team2_off_adv = [metric for metric in offensive_metrics if metric in metrics_results['comparisons'] and
+                     metrics_results['comparisons'][metric]['better_team'] == team2 and
+                     metrics_results['comparisons'][metric]['is_significant']]
+    
+    # Defensive strengths
+    defensive_metrics = ['defensive_rating', 'opponent_efg', 'steal_pct', 'block_pct']
+    team1_def_adv = [metric for metric in defensive_metrics if metric in metrics_results['comparisons'] and
+                     metrics_results['comparisons'][metric]['better_team'] == team1 and
+                     metrics_results['comparisons'][metric]['is_significant']]
+    
+    team2_def_adv = [metric for metric in defensive_metrics if metric in metrics_results['comparisons'] and
+                     metrics_results['comparisons'][metric]['better_team'] == team2 and
+                     metrics_results['comparisons'][metric]['is_significant']]
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.write(f"**{team1}**")
+        if team1_off_adv:
+            st.write("*Offensive:* " + ", ".join(team1_off_adv))
+        if team1_def_adv:
+            st.write("*Defensive:* " + ", ".join(team1_def_adv))
+        if not team1_off_adv and not team1_def_adv:
+            st.write("No significant strengths identified.")
+    
+    with col2:
+        st.write(f"**{team2}**")
+        if team2_off_adv:
+            st.write("*Offensive:* " + ", ".join(team2_off_adv))
+        if team2_def_adv:
+            st.write("*Defensive:* " + ", ".join(team2_def_adv))
+        if not team2_off_adv and not team2_def_adv:
+            st.write("No significant strengths identified.")
+
+def analyze_shot_distribution_comparison(team1_name, team2_name):
+    """Analyze and compare shot distributions between two teams"""
+    # Connect to database
+    conn = sqlite3.connect(db_path)
+    
+    # Get shot data for both teams
+    query = """
+    WITH team_ids AS (
+        SELECT DISTINCT game_id, tm 
+        FROM Teams 
+        WHERE name = ?
+    )
+    SELECT 
+        s.x_coord, s.y_coord, s.shot_result, s.action_type,
+        CASE 
+            WHEN s.action_type = '2pt' THEN 2
+            WHEN s.action_type = '3pt' THEN 3
+            ELSE 0
+        END AS point_value
+    FROM Shots s
+    JOIN team_ids t ON s.game_id = t.game_id AND s.team_id = t.tm
+    """
+    
+    team1_shots = pd.read_sql_query(query, conn, params=(team1_name,))
+    team2_shots = pd.read_sql_query(query, conn, params=(team2_name,))
+    
+    conn.close()
+    
+    if team1_shots.empty or team2_shots.empty:
+        return None
+    
+    # Process shot data
+    results = {
+        'team1_name': team1_name,
+        'team2_name': team2_name,
+        'team1_shots': len(team1_shots),
+        'team2_shots': len(team2_shots)
+    }
+    
+    # Calculate shot zones
+    zone_definitions = {
+        'rim': lambda x, y: np.sqrt((x - 25)**2 + (y - 5.25)**2) <= 4,  # Within 4 units of basket
+        'paint': lambda x, y: y <= 19 and not np.sqrt((x - 25)**2 + (y - 5.25)**2) <= 4,  # In paint but not rim
+        'midrange': lambda x, y: y > 19 and not is_three_point(x, y),  # Not in paint and not 3PT
+        'corner_three': lambda x, y: is_three_point(x, y) and (x <= 10 or x >= 40),  # Corner 3
+        'above_break_three': lambda x, y: is_three_point(x, y) and not (x <= 10 or x >= 40)  # Other 3s
+    }
+    
+    # Classify shots into zones
+    for team_shots, team_key in [(team1_shots, 'team1'), (team2_shots, 'team2')]:
+        zone_counts = {zone: 0 for zone in zone_definitions}
+        zone_makes = {zone: 0 for zone in zone_definitions}
+        zone_points = {zone: 0 for zone in zone_definitions}
+        
+        for _, shot in team_shots.iterrows():
+            for zone, condition in zone_definitions.items():
+                if condition(shot['x_coord'], shot['y_coord']):
+                    zone_counts[zone] += 1
+                    if shot['shot_result'] == 1:
+                        zone_makes[zone] += 1
+                        zone_points[zone] += shot['point_value']
+                    break
+        
+        total_shots = len(team_shots)
+        
+        # Calculate percentages and efficiency
+        zone_percentages = {zone: (count / total_shots * 100) if total_shots > 0 else 0 
+                           for zone, count in zone_counts.items()}
+        
+        zone_efficiency = {zone: (points / count) if count > 0 else 0 
+                         for zone, count, points in zip(zone_counts.keys(), 
+                                                      zone_counts.values(), 
+                                                      zone_points.values())}
+        
+        zone_accuracy = {zone: (makes / count * 100) if count > 0 else 0 
+                       for zone, count, makes in zip(zone_counts.keys(), 
+                                                  zone_counts.values(), 
+                                                  zone_makes.values())}
+        
+        results[f'{team_key}_zones'] = {
+            'counts': zone_counts,
+            'percentages': zone_percentages,
+            'efficiency': zone_efficiency,
+            'accuracy': zone_accuracy
+        }
+    
+    # Compare zone distributions and efficiency
+    zone_comparisons = {}
+    for zone in zone_definitions:
+        team1_pct = results['team1_zones']['percentages'][zone]
+        team2_pct = results['team2_zones']['percentages'][zone]
+        team1_eff = results['team1_zones']['efficiency'][zone]
+        team2_eff = results['team2_zones']['efficiency'][zone]
+        
+        zone_comparisons[zone] = {
+            'team1_percentage': team1_pct,
+            'team2_percentage': team2_pct,
+            'percentage_diff': team1_pct - team2_pct,
+            'team1_efficiency': team1_eff,
+            'team2_efficiency': team2_eff,
+            'efficiency_diff': team1_eff - team2_eff
+        }
+    
+    results['zone_comparisons'] = zone_comparisons
+    
+    return results
+
+def is_three_point(x, y):
+    """Determine if a shot is a three-pointer based on coordinates"""
+    # Distance from center of court
+    distance = np.sqrt((x - 25)**2 + (y - 25)**2)
+    # Approximately 23.75 feet (basketball 3pt line) in our coordinate system
+    return distance >= 22
+
+def display_shot_distribution_analysis():
+    """Display shot distribution analysis in Streamlit"""
+    st.header("🎯 Shot Distribution Analysis")
+    
+    # Get teams for comparison (assuming these are already selected)
+    team1 = st.session_state.get("team1")
+    team2 = st.session_state.get("team2")
+    
+    if not team1 or not team2:
+        st.warning("Please select teams for comparison first.")
+        return
+    
+    # Run shot distribution analysis
+    with st.spinner("Analyzing shot distributions..."):
+        shot_results = analyze_shot_distribution_comparison(team1, team2)
+    
+    if not shot_results:
+        st.warning("Insufficient shot data to analyze distribution.")
+        return
+    
+    # Display shot distribution comparison
+    st.subheader(f"Shot Zone Breakdown: {team1} vs {team2}")
+    
+    # Create dataframe for zone comparison
+    zone_names = {
+        'rim': 'At Rim',
+        'paint': 'Paint (Non-Rim)',
+        'midrange': 'Mid-Range',
+        'corner_three': 'Corner 3',
+        'above_break_three': 'Above Break 3'
+    }
+    
+    zone_data = []
+    for zone_id, zone_name in zone_names.items():
+        if zone_id in shot_results['zone_comparisons']:
+            comp = shot_results['zone_comparisons'][zone_id]
+            zone_data.append({
+                'Zone': zone_name,
+                f'{team1} %': f"{comp['team1_percentage']:.1f}%",
+                f'{team1} PPP': f"{comp['team1_efficiency']:.2f}",
+                f'{team2} %': f"{comp['team2_percentage']:.1f}%",
+                f'{team2} PPP': f"{comp['team2_efficiency']:.2f}",
+                'Distribution Diff': f"{comp['percentage_diff']:.1f}%",
+                'Efficiency Diff': f"{comp['efficiency_diff']:.2f}"
+            })
+    
+    zone_df = pd.DataFrame(zone_data)
+    st.table(zone_df.set_index('Zone'))
+    
+    # Create visualization
+    st.subheader("Zone Distribution Comparison")
+    
+    # Prepare data for plotting
+    zones = list(zone_names.values())
+    team1_pct = [shot_results['zone_comparisons'][zone]['team1_percentage'] for zone in zone_names]
+    team2_pct = [shot_results['zone_comparisons'][zone]['team2_percentage'] for zone in zone_names]
+    
+    # Set up figure
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    x = np.arange(len(zones))
+    width = 0.35
+    
+    # Plot bars
+    ax.bar(x - width/2, team1_pct, width, label=team1, color='blue', alpha=0.7)
+    ax.bar(x + width/2, team2_pct, width, label=team2, color='red', alpha=0.7)
+    
+    # Customize chart
+    ax.set_ylabel('% of Total Shots')
+    ax.set_title('Shot Distribution by Zone')
+    ax.set_xticks(x)
+    ax.set_xticklabels(zones)
+    ax.legend()
+    
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    
+    st.pyplot(fig)
+    
+    # Create efficiency visualization
+    st.subheader("Shooting Efficiency by Zone")
+    
+    # Prepare efficiency data
+    team1_eff = [shot_results['zone_comparisons'][zone]['team1_efficiency'] for zone in zone_names]
+    team2_eff = [shot_results['zone_comparisons'][zone]['team2_efficiency'] for zone in zone_names]
+    
+    # Set up figure
+    fig2, ax2 = plt.subplots(figsize=(10, 6))
+    
+    # Plot bars
+    ax2.bar(x - width/2, team1_eff, width, label=team1, color='blue', alpha=0.7)
+    ax2.bar(x + width/2, team2_eff, width, label=team2, color='red', alpha=0.7)
+    
+    # Add horizontal line for league average (~1 point per possession)
+    ax2.axhline(y=1.0, color='green', linestyle='--', alpha=0.7, label='League Avg')
+    
+    # Customize chart
+    ax2.set_ylabel('Points Per Shot')
+    ax2.set_title('Shooting Efficiency by Zone')
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(zones)
+    ax2.legend()
+    
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    
+    st.pyplot(fig2)
+    
+    # Analysis and insights
+    st.subheader("📝 Shot Distribution Insights")
+    
+    # Identify strengths and preferences
+    team1_favored_zones = sorted(zone_names.keys(), 
+                               key=lambda z: shot_results['zone_comparisons'][z]['team1_percentage'],
+                               reverse=True)[:2]
+    
+    team2_favored_zones = sorted(zone_names.keys(), 
+                               key=lambda z: shot_results['zone_comparisons'][z]['team2_percentage'],
+                               reverse=True)[:2]
+    
+    team1_efficient_zones = sorted(zone_names.keys(), 
+                                 key=lambda z: shot_results['zone_comparisons'][z]['team1_efficiency'],
+                                 reverse=True)[:2]
+    
+    team2_efficient_zones = sorted(zone_names.keys(), 
+                                 key=lambda z: shot_results['zone_comparisons'][z]['team2_efficiency'],
+                                 reverse=True)[:2]
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.write(f"**{team1} Shot Profile**")
+        st.write(f"Favorite Zones: {', '.join([zone_names[z] for z in team1_favored_zones])}")
+        st.write(f"Most Efficient Zones: {', '.join([zone_names[z] for z in team1_efficient_zones])}")
+        
+        # Identify if team is three-point heavy or rim-heavy
+        three_pt_pct = (shot_results['zone_comparisons']['corner_three']['team1_percentage'] + 
+                       shot_results['zone_comparisons']['above_break_three']['team1_percentage'])
+        
+        rim_pct = shot_results['zone_comparisons']['rim']['team1_percentage']
+        
+        if three_pt_pct > 35:
+            st.write("**Style:** Three-point heavy offense")
+        elif rim_pct > 35:
+            st.write("**Style:** Rim-attacking offense")
+        elif shot_results['zone_comparisons']['midrange']['team1_percentage'] > 30:
+            st.write("**Style:** Midrange-focused offense")
+        else:
+            st.write("**Style:** Balanced shot distribution")
+    
+    with col2:
+        st.write(f"**{team2} Shot Profile**")
+        st.write(f"Favorite Zones: {', '.join([zone_names[z] for z in team2_favored_zones])}")
+        st.write(f"Most Efficient Zones: {', '.join([zone_names[z] for z in team2_efficient_zones])}")
+        
+        # Identify if team is three-point heavy or rim-heavy
+        three_pt_pct = (shot_results['zone_comparisons']['corner_three']['team2_percentage'] + 
+                       shot_results['zone_comparisons']['above_break_three']['team2_percentage'])
+        
+        rim_pct = shot_results['zone_comparisons']['rim']['team2_percentage']
+        
+        if three_pt_pct > 35:
+            st.write("**Style:** Three-point heavy offense")
+        elif rim_pct > 35:
+            st.write("**Style:** Rim-attacking offense")
+        elif shot_results['zone_comparisons']['midrange']['team2_percentage'] > 30:
+            st.write("**Style:** Midrange-focused offense")
+        else:
+            st.write("**Style:** Balanced shot distribution")
+
+import os
+import sqlite3
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.image as mpimg
+import seaborn as sns
+import streamlit as st
+from datetime import datetime
+
+# Define SQLite database path
+db_path = os.path.join(os.path.dirname(__file__), "database.db")
+
+def analyze_team_shooting(team_name):
+    """
+    Analyze team shooting patterns using the existing court image
+    """
+    # Connect to database
+    conn = sqlite3.connect(db_path)
+    
+    # Query to get shooting data for the specified team
+    query = """
+    SELECT 
+        s.game_id,
+        s.team_id,
+        s.player_name,
+        s.period,
+        s.action_type,
+        s.shot_result,
+        s.x_coord,
+        s.y_coord,
+        t.tm, -- This indicates if team is home (1) or away (2)
+        t.name
+    FROM Shots s
+    JOIN Teams t ON s.game_id = t.game_id AND s.team_id = t.tm
+    WHERE t.name = ?
+    """
+    
+    shots_df = pd.read_sql_query(query, conn, params=(team_name,))
+    
+    # Close connection
+    conn.close()
+    
+    if shots_df.empty:
+        return None
+    
+    # Scale coordinates for the court image (assuming the court is 280x261)
+    shots_df['court_x'] = shots_df['x_coord'] * 2.8
+    shots_df['court_y'] = shots_df['y_coord'] * 2.61
+    
+    # Check if a shot is actually a 3-pointer based on distance from basket
+    # Basket position at approximately (6.2, 50) in the original coordinates
+    # So in the scaled coordinates it would be around (17.36, 130.5)
+    basket_x = 6.2 * 2.8  # = 17.36
+    basket_y = 50 * 2.61  # = 130.5
+    
+    # Function to determine if a shot is a three-pointer based on distance
+    def is_three_pointer(x, y):
+        # Convert coordinates
+        x_court = x
+        y_court = y
+        
+        # Distance from basket
+        distance = np.sqrt((x_court - basket_x)**2 + (y_court - basket_y)**2)
+        
+        # 3-point line is approximately at a radius of 23.75 feet from basket
+        # In our coordinate system this would be around 67 units
+        return distance > 67
+    
+    # Verify shot types (sometimes the database classification might not match the actual position)
+    shots_df['is_three_based_on_position'] = shots_df.apply(
+        lambda row: is_three_pointer(row['court_x'], row['court_y']), 
+        axis=1
+    )
+    
+    # For analysis, we'll use both the recorded type and the position-based type
+    shots_df['shot_type'] = shots_df['action_type']
+    
+    # Calculate points for each shot
+    shots_df['points'] = 0
+    shots_df.loc[(shots_df['shot_type'] == '2pt') & (shots_df['shot_result'] == 1), 'points'] = 2
+    shots_df.loc[(shots_df['shot_type'] == '3pt') & (shots_df['shot_result'] == 1), 'points'] = 3
+    
+    # Define shot zones based on position on court
+    shots_df['zone'] = 'Other'
+    
+    # Restricted area (close to basket)
+    distance_from_basket = np.sqrt((shots_df['court_x'] - basket_x)**2 + (shots_df['court_y'] - basket_y)**2)
+    shots_df.loc[distance_from_basket < 12, 'zone'] = 'Restricted Area'
+    
+    # Paint area
+    shots_df.loc[(distance_from_basket >= 12) & 
+                (distance_from_basket < 25) & 
+                (abs(shots_df['court_y'] - basket_y) < 42), 'zone'] = 'Paint'
+    
+    # Mid-range
+    shots_df.loc[(distance_from_basket >= 25) & 
+                (distance_from_basket < 67) & 
+                (shots_df['shot_type'] == '2pt'), 'zone'] = 'Mid-Range'
+    
+    # Corner 3
+    shots_df.loc[(shots_df['shot_type'] == '3pt') & 
+                (abs(shots_df['court_y'] - 130.5) > 70), 'zone'] = 'Corner 3'
+    
+    # Above the break 3
+    shots_df.loc[(shots_df['shot_type'] == '3pt') & 
+                (abs(shots_df['court_y'] - 130.5) <= 70), 'zone'] = 'Above Break 3'
+    
+    # Calculate shot efficiency by zone
+    zone_stats = shots_df.groupby('zone').agg(
+        total_shots=pd.NamedAgg(column='shot_result', aggfunc='count'),
+        made_shots=pd.NamedAgg(column='shot_result', aggfunc='sum'),
+        points=pd.NamedAgg(column='points', aggfunc='sum'),
+    ).reset_index()
+    
+    # Calculate percentages and points per shot
+    zone_stats['fg_percentage'] = round(zone_stats['made_shots'] / zone_stats['total_shots'] * 100, 1)
+    zone_stats['pps'] = round(zone_stats['points'] / zone_stats['total_shots'], 2)
+    zone_stats['distribution'] = round(zone_stats['total_shots'] / len(shots_df) * 100, 1)
+    
+    # Identify hot and cold zones (relative to average)
+    avg_fg = shots_df['shot_result'].mean() * 100
+    zone_stats['hot_zone'] = zone_stats['fg_percentage'] > (avg_fg + 5)  # 5% above average
+    zone_stats['cold_zone'] = zone_stats['fg_percentage'] < (avg_fg - 5)  # 5% below average
+    
+    # Group by player for player shooting analysis
+    player_stats = shots_df.groupby('player_name').agg(
+        total_shots=pd.NamedAgg(column='shot_result', aggfunc='count'),
+        made_shots=pd.NamedAgg(column='shot_result', aggfunc='sum'),
+        points=pd.NamedAgg(column='points', aggfunc='sum')
+    ).reset_index()
+    
+    player_stats['fg_percentage'] = round(player_stats['made_shots'] / player_stats['total_shots'] * 100, 1)
+    player_stats['pps'] = round(player_stats['points'] / player_stats['total_shots'], 2)
+    
+    # Sort by total shots
+    player_stats = player_stats.sort_values('total_shots', ascending=False)
+    
+    # Calculate additional team shooting stats
+    total_shots = len(shots_df)
+    made_shots = shots_df['shot_result'].sum()
+    fg_percentage = round(made_shots / total_shots * 100, 1) if total_shots > 0 else 0
+    
+    two_point_shots = shots_df[shots_df['shot_type'] == '2pt']
+    two_point_made = two_point_shots['shot_result'].sum()
+    two_point_total = len(two_point_shots)
+    two_point_pct = round(two_point_made / two_point_total * 100, 1) if two_point_total > 0 else 0
+    
+    three_point_shots = shots_df[shots_df['shot_type'] == '3pt']
+    three_point_made = three_point_shots['shot_result'].sum()
+    three_point_total = len(three_point_shots)
+    three_point_pct = round(three_point_made / three_point_total * 100, 1) if three_point_total > 0 else 0
+    
+    return {
+        'raw_data': shots_df,
+        'zone_stats': zone_stats,
+        'player_stats': player_stats,
+        'team_stats': {
+            'total_shots': total_shots,
+            'made_shots': made_shots,
+            'fg_percentage': fg_percentage,
+            'two_point_total': two_point_total,
+            'two_point_made': two_point_made,
+            'two_point_pct': two_point_pct,
+            'three_point_total': three_point_total,
+            'three_point_made': three_point_made,
+            'three_point_pct': three_point_pct,
+            'total_points': shots_df['points'].sum(),
+            'pps': round(shots_df['points'].sum() / total_shots, 2) if total_shots > 0 else 0
+        }
+    }
+
+def display_team_shooting_analysis():
+    """Display team shooting analysis in Streamlit using court image"""
+    st.title("🏀 Team Shooting Analysis")
+    
+    # Current date/time and user
+    st.markdown(f"*Analysis generated on: 2025-03-28 21:47:56*")
+    st.markdown(f"*Generated by: Dodga010*")
+    
+    # Team selection
+    teams = fetch_teams()
+    
+    if not teams:
+        st.error("No team data available.")
+        return
+    
+    selected_team = st.selectbox("Select Team", teams, index=0)
+    
+    if selected_team:
+        # Run shooting analysis
+        with st.spinner(f"Analyzing shooting data for {selected_team}..."):
+            shooting_results = analyze_team_shooting(selected_team)
+        
+        if shooting_results is None:
+            st.error(f"No shooting data available for {selected_team}.")
+            return
+            
+        # Display overall shooting stats
+        st.header("📈 Team Shooting Overview")
+        
+        team_stats = shooting_results['team_stats']
+        
+        # Overall shooting metrics
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric("Field Goal %", f"{team_stats['fg_percentage']}%")
+        
+        with col2:
+            st.metric("2PT %", f"{team_stats['two_point_pct']}%")
+        
+        with col3:
+            st.metric("3PT %", f"{team_stats['three_point_pct']}%")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric("Total Shots", team_stats['total_shots'])
+        
+        with col2:
+            st.metric("Made Shots", team_stats['made_shots'])
+        
+        with col3:
+            st.metric("Points Per Shot", team_stats['pps'])
+        
+        # Shot chart visualization
+        st.subheader("Shot Distribution Chart")
+        
+        # Create shot chart using the image instead of drawing
+        fig, ax = plt.subplots(figsize=(12, 11))
+        
+        # Check if the court image exists
+        if os.path.exists("fiba_courtonly.jpg"):
+            # Load court image
+            court_img = mpimg.imread("fiba_courtonly.jpg")
+            ax.imshow(court_img, extent=[0, 280, 0, 261], aspect="auto")
+            
+            # Plot shots
+            shots_df = shooting_results['raw_data']
+            made = shots_df[shots_df['shot_result'] == 1]
+            missed = shots_df[shots_df['shot_result'] == 0]
+            
+            ax.scatter(made['court_x'], made['court_y'], 
+                      c='green', s=50, alpha=0.7, marker='o', label='Made')
+            ax.scatter(missed['court_x'], missed['court_y'], 
+                      c='red', s=50, alpha=0.7, marker='x', label='Missed')
+            
+            # Add a shot density heatmap
+            if len(shots_df) > 10:  # Only add heatmap if we have enough shots
+                sns.kdeplot(x=shots_df['court_x'], y=shots_df['court_y'], 
+                           fill=True, alpha=0.3, levels=10, 
+                           cmap='YlOrRd', ax=ax)
+            
+            # Remove axes
+            ax.set_xticks([])
+            ax.set_yticks([])
+            
+            # Add title and legend
+            ax.set_title(f"{selected_team} Shot Chart", fontsize=16)
+            ax.legend(loc='upper left')
+            
+            st.pyplot(fig)
+        else:
+            st.error("Court image 'fiba_courtonly.jpg' not found.")
+            
+            # Create a simple scatter plot without court image as fallback
+            fig, ax = plt.subplots(figsize=(10, 10))
+            
+            shots_df = shooting_results['raw_data']
+            made = shots_df[shots_df['shot_result'] == 1]
+            missed = shots_df[shots_df['shot_result'] == 0]
+            
+            ax.scatter(made['x_coord'], made['y_coord'], 
+                      c='green', s=50, alpha=0.7, marker='o', label='Made')
+            ax.scatter(missed['x_coord'], missed['y_coord'], 
+                      c='red', s=50, alpha=0.7, marker='x', label='Missed')
+            
+            ax.set_xlim(0, 100)
+            ax.set_ylim(0, 100)
+            ax.set_title(f"{selected_team} Shot Chart (No Court Image)", fontsize=16)
+            ax.legend()
+            
+            st.pyplot(fig)
+        
+        # Shot zone analysis
+        st.subheader("Shooting Efficiency by Zone")
+        
+        zone_stats = shooting_results['zone_stats'].sort_values('total_shots', ascending=False)
+        
+        # Format for display
+        zone_display = zone_stats.copy()
+        zone_display['FG%'] = zone_display['fg_percentage'].astype(str) + '%'
+        zone_display['Distribution'] = zone_display['distribution'].astype(str) + '%'
+        
+        # Add a column that indicates if it's a hot or cold zone
+        zone_display['Zone Efficiency'] = 'Average'
+        zone_display.loc[zone_display['hot_zone'] == True, 'Zone Efficiency'] = 'Hot Zone 🔥'
+        zone_display.loc[zone_display['cold_zone'] == True, 'Zone Efficiency'] = 'Cold Zone ❄️'
+        
+        # Select and rename columns for display
+        display_df = zone_display[['zone', 'total_shots', 'made_shots', 'FG%', 'pps', 'Distribution', 'Zone Efficiency']].rename(
+            columns={
+                'zone': 'Zone', 
+                'total_shots': 'Attempts', 
+                'made_shots': 'Made', 
+                'pps': 'Points/Shot'
+            }
+        )
+        
+        # Display zone stats table
+        st.dataframe(display_df)
+        
+        # Player shooting stats
+        st.subheader("Individual Player Shooting")
+        
+        player_stats = shooting_results['player_stats'].head(10)  # Top 10 shooters
+        player_display = player_stats.copy()
+        player_display['FG%'] = player_display['fg_percentage'].astype(str) + '%'
+        
+        st.table(player_display[['player_name', 'total_shots', 'made_shots', 'FG%', 'pps']].rename(
+            columns={
+                'player_name': 'Player', 
+                'total_shots': 'Attempts', 
+                'made_shots': 'Made',
+                'pps': 'Points/Shot'
+            }
+        ))
+        
+        # Shot distribution by type
+        st.subheader("Shot Type Distribution")
+        
+        # Calculate shot type distribution
+        shots_df = shooting_results['raw_data']
+        shot_types = shots_df.groupby('shot_type').agg(
+            count=pd.NamedAgg(column='shot_result', aggfunc='count'),
+            made=pd.NamedAgg(column='shot_result', aggfunc='sum'),
+            points=pd.NamedAgg(column='points', aggfunc='sum')
+        ).reset_index()
+        
+        shot_types['percentage'] = round(shot_types['count'] / shot_types['count'].sum() * 100, 1)
+        shot_types['efficiency'] = round(shot_types['made'] / shot_types['count'] * 100, 1)
+        shot_types['pps'] = round(shot_types['points'] / shot_types['count'], 2)
+        
+        # Create pie chart
+        fig, ax = plt.subplots(figsize=(10, 6))
+        
+        ax.pie(shot_types['percentage'], 
+               labels=[f"{row['shot_type']} ({row['percentage']}%)" for _, row in shot_types.iterrows()],
+               autopct='%1.1f%%',
+               startangle=90,
+               colors=['#ff9999','#66b3ff'])
+        ax.axis('equal')  # Equal aspect ratio ensures that pie is drawn as a circle
+        
+        ax.set_title(f"{selected_team} Shot Type Distribution")
+        
+        st.pyplot(fig)
+        
+        # Shot zone distribution by efficiency
+        st.subheader("Shot Zone Efficiency")
+        
+        fig, ax = plt.subplots(figsize=(10, 6))
+        
+        # Use zone stats
+        zones = zone_stats['zone']
+        pps_values = zone_stats['pps']
+        
+        # Sort by points per shot
+        sorted_indices = pps_values.argsort()
+        zones = zones.iloc[sorted_indices]
+        pps_values = pps_values.iloc[sorted_indices]
+        
+        # Create horizontal bar chart
+        bars = ax.barh(zones, pps_values, color='skyblue')
+        
+        # Add data labels
+        for i, bar in enumerate(bars):
+            width = bar.get_width()
+            ax.text(width + 0.05, bar.get_y() + bar.get_height()/2,
+                   f"{width:.2f}", ha='left', va='center')
+        
+        ax.set_xlabel('Points Per Shot')
+        ax.set_title(f'{selected_team} Shooting Efficiency by Zone')
+        
+        # Add average PPS line
+        avg_pps = team_stats['pps']
+        ax.axvline(x=avg_pps, color='red', linestyle='--', label=f'Avg PPS: {avg_pps:.2f}')
+        ax.legend()
+        
+        plt.tight_layout()
+        st.pyplot(fig)
+        
+        # Display insights
+        st.header("📋 Shooting Insights")
+        
+        # Generate insights
+        insights = []
+        
+        # Insight 1: Overall shooting efficiency
+        if team_stats['fg_percentage'] > 45:
+            insights.append(f"**Efficient Shooting Team**: {selected_team} shoots {team_stats['fg_percentage']}% from the field, which is above average.")
+        else:
+            insights.append(f"**Below Average Shooting**: {selected_team} shoots {team_stats['fg_percentage']}% from the field, which is below the typical league average.")
+        
+        # Insight 2: 3-point shooting
+        three_pt_ratio = team_stats['three_point_total'] / team_stats['total_shots'] * 100
+        if three_pt_ratio > 40:
+            insights.append(f"**Three-Point Heavy**: {round(three_pt_ratio, 1)}% of shots come from beyond the arc.")
+            if team_stats['three_point_pct'] > 35:
+                insights.append("**Effective 3PT Shooting**: Above average efficiency on high volume.")
+            else:
+                insights.append("**Inefficient Volume Shooting**: High 3PT volume with below average efficiency.")
+        
+        # Insight 3: Best zones
+        if not zone_stats.empty:
+            best_zone = zone_stats.sort_values('pps', ascending=False).iloc[0]
+            if best_zone['total_shots'] >= 10:
+                insights.append(f"**Most Efficient Zone**: {best_zone['zone']} ({best_zone['pps']} points per shot on {best_zone['total_shots']} attempts).")
+        
+        # Insight 4: Shot selection
+        restricted_area_pct = zone_stats[zone_stats['zone'] == 'Restricted Area']['distribution'].sum() if 'Restricted Area' in zone_stats['zone'].values else 0
+        if restricted_area_pct > 30:
+            insights.append(f"**Paint-Dominant Team**: {round(restricted_area_pct, 1)}% of shots come from the restricted area.")
+        
+        mid_range_pct = zone_stats[zone_stats['zone'] == 'Mid-Range']['distribution'].sum() if 'Mid-Range' in zone_stats['zone'].values else 0
+        if mid_range_pct > 30:
+            insights.append(f"**Mid-Range Heavy**: {round(mid_range_pct, 1)}% of shots are mid-range jumpers.")
+        
+        # Insight 5: Best shooters
+        if not player_stats.empty:
+            best_shooter = player_stats[player_stats['total_shots'] >= 20].sort_values('fg_percentage', ascending=False).iloc[0] if not player_stats[player_stats['total_shots'] >= 20].empty else None
+            if best_shooter is not None:
+                insights.append(f"**Most Efficient Shooter**: {best_shooter['player_name']} ({best_shooter['fg_percentage']}% on {best_shooter['total_shots']} attempts).")
+        
+        # Display insights
+        for insight in insights:
+            st.write(insight)
+        
+        # Shot distribution over time (if we have multiple games)
+        game_counts = shooting_results['raw_data']['game_id'].nunique()
+        if game_counts > 1:
+            st.subheader("Shot Selection Trends")
+            
+            # Group by game_id and shot_type
+            game_shot_trends = shooting_results['raw_data'].groupby(['game_id', 'shot_type']).size().unstack().fillna(0)
+            
+            # Calculate percentage of each shot type per game
+            game_shot_percentages = game_shot_trends.divide(game_shot_trends.sum(axis=1), axis=0) * 100
+            
+            # Create line chart
+            fig, ax = plt.subplots(figsize=(10, 6))
+            
+            for shot_type in game_shot_percentages.columns:
+                ax.plot(game_shot_percentages.index, game_shot_percentages[shot_type], 
+                       marker='o', label=shot_type)
+            
+            ax.set_xlabel('Game ID')
+            ax.set_ylabel('Percentage of Shots')
+            ax.set_title(f"{selected_team} Shot Type Distribution Over Time")
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+            
+            st.pyplot(fig)
+
+def fetch_teams():
+    """Fetch all team names from database"""
+    conn = sqlite3.connect(db_path)
+    query = "SELECT DISTINCT name FROM Teams ORDER BY name"
+    teams = pd.read_sql_query(query, conn)["name"].tolist()
+    conn.close()
+    return teams
+
+
 
 def main():
     st.title("🏀 Basketball Stats Viewer")
@@ -5688,6 +6845,8 @@ def main():
         display_four_factors_analysis()
         display_basketball_stats_win_analysis()
         display_team_comparison_analysis()
+        display_advanced_metrics_analysis()
+        display_team_shooting_analysis()
 
     elif page == "Match report":
         display_match_report()

@@ -14,6 +14,7 @@ import plotly.graph_objects as go
 from datetime import datetime
 import os
 from collections import defaultdict
+from itertools import combinations
 
 # ✅ Define SQLite database path (works locally & online)
 db_path = os.path.join(os.path.dirname(__file__), "database.db")
@@ -3563,143 +3564,501 @@ def get_teams():
 
 from collections import defaultdict
 
+from datetime import datetime
+
 def analyze_all_team_lineups():
-    """Analyze all lineups across all games, combining home and away appearances."""
+    """Analyze all lineups across all games."""
     conn = sqlite3.connect(db_path)
+    
+    # Get all games
     games_query = "SELECT DISTINCT game_id FROM PlayByPlay;"
     games = pd.read_sql_query(games_query, conn)
+    
+    # Get all teams
+    teams_query = """
+    SELECT DISTINCT name 
+    FROM Teams 
+    ORDER BY name;
+    """
+    teams = pd.read_sql_query(teams_query, conn)["name"].tolist()
     conn.close()
 
     all_lineup_stats = []
     all_players = set()
     player_impact_stats = defaultdict(lambda: {'total_plus_minus': 0, 'total_actions': 0, 'lineups': 0})
-    lineup_games = defaultdict(set)  # Track unique games for each lineup
+    lineup_games = defaultdict(set)
+    lineup_teams = defaultdict(set)
     
     for game_id in games['game_id']:
         segments = analyze_five_player_segments(game_id)
         if segments:
             df_segments = pd.DataFrame(segments)
+            
+            # Get team names for this game
+            conn = sqlite3.connect(db_path)
+            team_query = """
+            SELECT tm, name 
+            FROM Teams 
+            WHERE game_id = ? 
+            ORDER BY tm;
+            """
+            game_teams = pd.read_sql_query(team_query, conn, params=(game_id,))
+            conn.close()
+            
+            team_dict = dict(zip(game_teams['tm'], game_teams['name']))
+            
+            # Calculate Duration
             df_segments['Duration'] = df_segments['end_action'] - df_segments['start_action'] + 1
             
             # Process both home and away lineups
             for team_num in [1, 2]:
+                team_name = team_dict.get(team_num, f"Team {team_num}")
                 team_stats = df_segments.copy()
-                team_stats['lineup_str'] = team_stats[f'team{team_num}_five'].apply(lambda x: ' | '.join(sorted(x)))
-                team_stats['Plus_Minus'] = team_stats['end_lead'] - team_stats['start_lead']
+                
+                # Create lineup string
+                team_stats['lineup_str'] = team_stats[f'team{team_num}_five'].apply(
+                    lambda x: ' | '.join(sorted(x)) if isinstance(x, list) else ''
+                )
+                
+                # Calculate plus/minus
+                team_stats['net_points'] = team_stats['end_lead'] - team_stats['start_lead']
                 if team_num == 2:
-                    team_stats['Plus_Minus'] = -team_stats['Plus_Minus']
+                    team_stats['net_points'] = -team_stats['net_points']
                 
-                # Update player impact stats
-                for _, row in team_stats.iterrows():
-                    lineup_str = row['lineup_str']
-                    lineup_games[lineup_str].add(game_id)  # Add game_id to this lineup's set
-                    
-                    for player in row[f'team{team_num}_five']:
-                        player_impact_stats[player]['total_plus_minus'] += row['Plus_Minus']
-                        player_impact_stats[player]['total_actions'] += row['Duration']
-                        player_impact_stats[player]['lineups'] += 1
-                
-                for lineup in df_segments[f'team{team_num}_five']:
-                    all_players.update(lineup)
-                
-                game_stats = team_stats.groupby('lineup_str').agg({
+                # Group by lineup for this game
+                game_lineup_stats = team_stats.groupby('lineup_str').agg({
                     'Duration': 'sum',
-                    'Plus_Minus': 'sum'
+                    'net_points': 'sum'
                 }).reset_index()
                 
-                game_stats['game_id'] = game_id
-                all_lineup_stats.append(game_stats)
+                game_lineup_stats['team_name'] = team_name
+                game_lineup_stats['game_id'] = game_id
+                
+                # Update tracking
+                for _, row in team_stats.iterrows():
+                    if row['lineup_str']:  # Only process valid lineups
+                        lineup_str = row['lineup_str']
+                        lineup_games[lineup_str].add(game_id)
+                        lineup_teams[lineup_str].add(team_name)
+                        
+                        for player in row[f'team{team_num}_five']:
+                            if isinstance(player, str):  # Only process valid player names
+                                all_players.add(player)
+                                player_impact_stats[player]['total_plus_minus'] += row['net_points']
+                                player_impact_stats[player]['total_actions'] += row['Duration']
+                                player_impact_stats[player]['lineups'] += 1
+                
+                all_lineup_stats.append(game_lineup_stats)
     
     if not all_lineup_stats:
-        return None, [], {}
-        
+        return None, [], {}, [], len(games)
+    
     # Combine all games stats
     all_stats = pd.concat(all_lineup_stats, ignore_index=True)
     
     # Calculate aggregate statistics
-    lineup_stats = all_stats.groupby('lineup_str').agg({
+    lineup_stats = all_stats.groupby(['lineup_str', 'team_name']).agg({
         'Duration': 'sum',
-        'Plus_Minus': 'sum'
+        'net_points': 'sum'
     }).reset_index()
     
-    # Add the actual games played count from our tracking
+    # Add games played and team info
     lineup_stats['Games Played'] = lineup_stats['lineup_str'].apply(lambda x: len(lineup_games[x]))
+    lineup_stats['Teams'] = lineup_stats['lineup_str'].apply(lambda x: ' | '.join(sorted(lineup_teams[x])))
     
-    # Add reliability score (more actions = more reliable)
-    lineup_stats['Reliability'] = (lineup_stats['Duration'] / lineup_stats['Duration'].max() * 100).round(1)
-    
-    # Calculate player impact per 100 possessions
-    player_impact = {
-        player: {
-            'Plus_Minus_per_100': round((stats['total_plus_minus'] / stats['total_actions']) * 100, 2),
-            'Total_Actions': stats['total_actions'],
-            'Num_Lineups': stats['lineups'],
-            'Games_Played': len(set(game_id for lineup in lineup_games 
-                                  if player in lineup.split(' | ') 
-                                  for game_id in lineup_games[lineup]))
-        }
-        for player, stats in player_impact_stats.items()
-    }
-    
-    # Rename columns for display
-    lineup_stats = lineup_stats.rename(columns={
-        'lineup_str': 'Lineup',
-        'Duration': 'Total Actions',
-        'Plus_Minus': 'Plus/Minus'
-    })
+    # Rename net_points to Plus/Minus
+    lineup_stats = lineup_stats.rename(columns={'net_points': 'Plus/Minus'})
     
     # Calculate additional metrics
+    lineup_stats['Reliability'] = (lineup_stats['Duration'] / lineup_stats['Duration'].max() * 100).round(1)
     lineup_stats['Avg Plus/Minus per Game'] = (lineup_stats['Plus/Minus'] / lineup_stats['Games Played']).round(2)
-    lineup_stats['Plus/Minus per 100'] = ((lineup_stats['Plus/Minus'] / lineup_stats['Total Actions']) * 100).round(2)
+    lineup_stats['Plus/Minus per 100'] = (lineup_stats['Plus/Minus'] / lineup_stats['Duration'] * 100).round(2)
     
-    # Add total games analyzed
-    total_games = len(games)
+    # Rename columns for clarity
+    lineup_stats = lineup_stats.rename(columns={
+        'lineup_str': 'Lineup',
+        'team_name': 'Primary Team',
+        'Duration': 'Total Actions'
+    })
     
     # Arrange columns in desired order
     lineup_stats = lineup_stats[[
-        'Lineup', 'Total Actions', 'Games Played', 'Plus/Minus', 
-        'Avg Plus/Minus per Game', 'Plus/Minus per 100', 'Reliability'
+        'Lineup', 
+        'Primary Team', 
+        'Teams',
+        'Total Actions',
+        'Games Played',
+        'Plus/Minus',
+        'Avg Plus/Minus per Game',
+        'Plus/Minus per 100',
+        'Reliability'
     ]]
     
-    return lineup_stats, sorted(list(all_players)), player_impact, total_games
+    return lineup_stats, sorted(list(all_players)), player_impact_stats, teams, len(games)
 
+def analyze_lineup_patterns(lineup_stats, player_impact_stats):
+    """Analyze patterns in lineup performance to identify good and bad combinations."""
+    
+    # Convert lineup strings to player combinations
+    def get_player_pairs(lineup):
+        players = lineup.split(' | ')
+        return list(combinations(players, 2))
+    
+    # Track pair statistics
+    pair_stats = defaultdict(lambda: {
+        'total_plus_minus': 0,
+        'total_actions': 0,
+        'games_together': 0,
+        'lineups_together': 0,
+        'avg_reliability': 0
+    })
+    
+    # Analyze each lineup
+    for _, row in lineup_stats.iterrows():
+        pairs = get_player_pairs(row['Lineup'])
+        for pair in pairs:
+            pair_key = tuple(sorted(pair))
+            pair_stats[pair_key]['total_plus_minus'] += row['Plus/Minus']
+            pair_stats[pair_key]['total_actions'] += row['Total Actions']
+            pair_stats[pair_key]['games_together'] += row['Games Played']
+            pair_stats[pair_key]['lineups_together'] += 1
+            pair_stats[pair_key]['avg_reliability'] += row['Reliability']
+    
+    # Calculate pair effectiveness
+    pair_analysis = []
+    for pair, stats in pair_stats.items():
+        if stats['total_actions'] > 0:
+            avg_plus_minus_per_100 = (stats['total_plus_minus'] / stats['total_actions'] * 100)
+            avg_reliability = stats['avg_reliability'] / stats['lineups_together']
+            
+            pair_analysis.append({
+                'Player 1': pair[0],
+                'Player 2': pair[1],
+                'Games Together': stats['games_together'],
+                'Total Actions': stats['total_actions'],
+                'Plus/Minus per 100': round(avg_plus_minus_per_100, 2),
+                'Avg Reliability': round(avg_reliability, 1), 
+                'Number of Lineups': stats['lineups_together'],
+                'Recommendation': 'Strong Pair' if avg_plus_minus_per_100 > 3 and avg_reliability > 35
+                                else 'Avoid Pairing' if avg_plus_minus_per_100 < -3 and stats['games_together'] > 3
+                                else 'Neutral'
+            })
+    
+    return pd.DataFrame(pair_analysis)
+
+def identify_lineup_patterns(lineup_stats):
+    """Identify patterns in successful and unsuccessful lineups."""
+    
+    # Calculate average performance metrics
+    avg_plus_minus = lineup_stats['Plus/Minus per 100'].mean()
+    std_plus_minus = lineup_stats['Plus/Minus per 100'].std()
+    
+    patterns = {
+        'strong_lineups': lineup_stats[
+            (lineup_stats['Plus/Minus per 100'] > (avg_plus_minus + std_plus_minus)) &
+            (lineup_stats['Games Played'] >= 3) &
+            (lineup_stats['Reliability'] > 50)
+        ],
+        'weak_lineups': lineup_stats[
+            (lineup_stats['Plus/Minus per 100'] < (avg_plus_minus - std_plus_minus)) &
+            (lineup_stats['Games Played'] >= 3) &
+            (lineup_stats['Reliability'] > 50)
+        ],
+        'high_potential': lineup_stats[
+            (lineup_stats['Plus/Minus per 100'] > avg_plus_minus) &
+            (lineup_stats['Games Played'] < 3) &
+            (lineup_stats['Reliability'] > 70)
+        ]
+    }
+    
+    return patterns
+
+def display_pattern_analysis(lineup_stats, player_impact_stats):
+    """Display pattern analysis in the Streamlit interface."""
+    st.subheader("🔍 Pattern Analysis")
+    
+    # Analyze player pairs
+    pair_analysis = analyze_lineup_patterns(lineup_stats, player_impact_stats)
+    
+    # Display strong pairs
+    st.write("### 💪 Strong Player Combinations")
+    strong_pairs = pair_analysis[pair_analysis['Recommendation'] == 'Strong Pair'].sort_values(
+        'Plus/Minus per 100', ascending=False
+    )
+    if not strong_pairs.empty:
+        st.dataframe(strong_pairs)
+    else:
+        st.info("No strong pairs identified yet.")
+    
+    # Display pairs to avoid
+    st.write("### ⚠️ Combinations to Avoid")
+    weak_pairs = pair_analysis[pair_analysis['Recommendation'] == 'Avoid Pairing'].sort_values(
+        'Plus/Minus per 100'
+    )
+    if not weak_pairs.empty:
+        st.dataframe(weak_pairs)
+    else:
+        st.info("No clearly negative pairs identified.")
+    
+    # Get lineup patterns
+    patterns = identify_lineup_patterns(lineup_stats)
+    
+    # Display strong lineups
+    st.write("### 🏆 Most Effective Lineups")
+    if not patterns['strong_lineups'].empty:
+        st.dataframe(patterns['strong_lineups'])
+    else:
+        st.info("No consistently strong lineups identified yet.")
+    
+    # Display lineups to avoid
+    st.write("### ⛔ Least Effective Lineups")
+    if not patterns['weak_lineups'].empty:
+        st.dataframe(patterns['weak_lineups'])
+    else:
+        st.info("No consistently weak lineups identified yet.")
+    
+    # Display high potential lineups
+    st.write("### 🌟 High Potential Lineups (Limited Sample)")
+    if not patterns['high_potential'].empty:
+        st.dataframe(patterns['high_potential'])
+    else:
+        st.info("No high potential lineups identified yet.")
+    
+    # Add this to your existing display_team_analysis function
+    st.subheader("📊 Pattern Analysis")
+    
+    # Create visualization of pair effectiveness
+    fig = px.scatter(pair_analysis,
+                    x='Avg Reliability',
+                    y='Plus/Minus per 100',
+                    size='Games Together',
+                    color='Recommendation',
+                    hover_data=['Player 1', 'Player 2', 'Number of Lineups'],
+                    title='Player Pair Effectiveness')
+    
+    st.plotly_chart(fig)
+    
+def analyze_player_impact(lineup_stats):
+    """Analyze how each player affects different lineups."""
+    
+    # Create a dictionary to store player impact metrics
+    player_impacts = defaultdict(lambda: {
+        'total_lineups': 0,
+        'positive_impact_lineups': 0,
+        'negative_impact_lineups': 0,
+        'total_plus_minus': 0,
+        'total_actions': 0,
+        'lineup_effects': [],
+        'worst_combinations': [],
+        'best_combinations': []
+    })
+    
+    # Analyze each lineup
+    for _, row in lineup_stats.iterrows():
+        players = row['Lineup'].split(' | ')
+        plus_minus_per_100 = row['Plus/Minus per 100']
+        reliability = row['Reliability']
+        games = row['Games Played']
+        
+        # Only consider lineups with sufficient sample size
+        if games >= 3 and reliability >= 30:
+            # Analyze impact of each player in the lineup
+            for player in players:
+                player_impacts[player]['total_lineups'] += 1
+                player_impacts[player]['total_plus_minus'] += plus_minus_per_100
+                player_impacts[player]['total_actions'] += row['Total Actions']
+                
+                # Record lineup effect
+                other_players = [p for p in players if p != player]
+                effect = {
+                    'other_players': other_players,
+                    'plus_minus': plus_minus_per_100,
+                    'games': games,
+                    'reliability': reliability
+                }
+                player_impacts[player]['lineup_effects'].append(effect)
+                
+                # Track positive/negative impact
+                if plus_minus_per_100 > 0:
+                    player_impacts[player]['positive_impact_lineups'] += 1
+                elif plus_minus_per_100 < 0:
+                    player_impacts[player]['negative_impact_lineups'] += 1
+    
+    # Calculate final metrics and find problematic combinations
+    impact_analysis = []
+    for player, stats in player_impacts.items():
+        if stats['total_lineups'] > 0:
+            # Calculate average impact
+            avg_impact = stats['total_plus_minus'] / stats['total_lineups']
+            
+            # Find worst and best combinations
+            lineup_effects = stats['lineup_effects']
+            sorted_effects = sorted(lineup_effects, key=lambda x: x['plus_minus'])
+            
+            worst_combos = sorted_effects[:3] if len(sorted_effects) >= 3 else sorted_effects
+            best_combos = sorted_effects[-3:] if len(sorted_effects) >= 3 else []
+            
+            impact_analysis.append({
+                'Player': player,
+                'Avg Impact per 100': round(avg_impact, 2),
+                'Total Lineups': stats['total_lineups'],
+                'Positive Impact %': round(stats['positive_impact_lineups'] / stats['total_lineups'] * 100, 1),
+                'Negative Impact %': round(stats['negative_impact_lineups'] / stats['total_lineups'] * 100, 1),
+                'Total Actions': stats['total_actions'],
+                'Worst Combinations': [
+                    f"{', '.join(combo['other_players'])} ({combo['plus_minus']:.1f})"
+                    for combo in worst_combos
+                ],
+                'Best Combinations': [
+                    f"{', '.join(combo['other_players'])} ({combo['plus_minus']:.1f})"
+                    for combo in reversed(best_combos)
+                ]
+            })
+    
+    return pd.DataFrame(impact_analysis)
+
+def display_player_impact_analysis(lineup_stats):
+    """Display detailed player impact analysis."""
+    st.subheader("🔍 Player Impact Analysis")
+    
+    impact_df = analyze_player_impact(lineup_stats)
+    
+    # Sort by average impact
+    impact_df_sorted = impact_df.sort_values('Avg Impact per 100', ascending=True)
+    
+    # Display problematic players
+    st.write("### ⚠️ Players with Potential Negative Impact")
+    negative_impact = impact_df_sorted[
+        (impact_df_sorted['Avg Impact per 100'] < 0) & 
+        (impact_df_sorted['Total Lineups'] >= 3)
+    ]
+    
+    if not negative_impact.empty:
+        for _, player in negative_impact.iterrows():
+            st.write(f"**{player['Player']}**")
+            st.write(f"- Average Impact per 100 possessions: {player['Avg Impact per 100']:.1f}")
+            st.write(f"- Negative Impact in {player['Negative Impact %']}% of lineups")
+            st.write("Worst lineup combinations:")
+            for combo in player['Worst Combinations'][:3]:
+                st.write(f"  • With {combo}")
+            st.write("---")
+    else:
+        st.info("No consistently negative impact players identified.")
+    
+    # Visualization of player impact
+    st.subheader("📊 Player Impact Distribution")
+    
+    fig = px.scatter(impact_df,
+                    x='Total Lineups',
+                    y='Avg Impact per 100',
+                    size='Total Actions',
+                    color='Positive Impact %',
+                    hover_data=['Player', 'Negative Impact %'],
+                    title='Player Impact Analysis')
+    
+    fig.add_hline(y=0, line_dash="dash", line_color="red")
+    st.plotly_chart(fig)
+    
+    # Detailed statistics table
+    st.write("### 📋 Detailed Player Statistics")
+    detailed_stats = impact_df[[
+        'Player', 
+        'Avg Impact per 100', 
+        'Total Lineups',
+        'Positive Impact %',
+        'Negative Impact %',
+        'Total Actions'
+    ]].sort_values('Total Lineups', ascending=False)
+    
+    st.dataframe(detailed_stats)
+    
+    # Player compatibility matrix
+    st.write("### 🔄 Player Compatibility Analysis")
+    compatibility_data = []
+    
+    for _, row in lineup_stats.iterrows():
+        players = row['Lineup'].split(' | ')
+        plus_minus = row['Plus/Minus per 100']
+        games = row['Games Played']
+        
+        if games >= 3:  # Only consider lineups with sufficient sample size
+            for p1, p2 in combinations(players, 2):
+                compatibility_data.append({
+                    'Player 1': p1,
+                    'Player 2': p2,
+                    'Plus/Minus': plus_minus,
+                    'Games': games
+                })
+    
+    if compatibility_data:
+        compat_df = pd.DataFrame(compatibility_data)
+        pivot_compat = compat_df.groupby(['Player 1', 'Player 2'])['Plus/Minus'].mean().reset_index()
+        
+        # Create heatmap
+        players_list = sorted(list(set(pivot_compat['Player 1'].unique()) | set(pivot_compat['Player 2'].unique())))
+        compat_matrix = pd.DataFrame(0, index=players_list, columns=players_list)
+        
+        for _, row in pivot_compat.iterrows():
+            compat_matrix.loc[row['Player 1'], row['Player 2']] = row['Plus/Minus']
+            compat_matrix.loc[row['Player 2'], row['Player 1']] = row['Plus/Minus']
+        
+        fig = px.imshow(compat_matrix,
+                       labels=dict(x="Player 2", y="Player 1", color="Plus/Minus per 100"),
+                       title="Player Compatibility Heatmap")
+        st.plotly_chart(fig)
+
+
+    
+    
 def display_team_analysis():
-    st.title("📊 Lineup Analysis")
+    """Display team lineup analysis with proper formatting."""
+    st.title("📊 Season Lineup Analysis")
     
-    # Add timestamp and user info
-    st.markdown("*Analysis generated on: 2025-03-25 22:41:00*")
-    st.markdown("*Generated by: Dodga010*")
+    # Format current date/time in UTC
+    current_time = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    current_user = "Dodga010"  # Replace with your actual user system
+    # Display metadata with proper formatting
+    st.markdown(f"""
+    *Current Date and Time (UTC - YYYY-MM-DD HH:MM:SS formatted): {current_time}*  
+    *Current User's Login: {current_user}*
+    """)
     
-    stats, all_players, player_impact, total_games = analyze_all_team_lineups()
+    # Get analysis data
+    stats, all_players, player_impact, teams, total_games = analyze_all_team_lineups()
     
     if stats is None:
         st.warning("No lineup data available.")
         return
-        
+    
     st.info(f"Analyzing data from {total_games} total games")
     
-    # Add filters
-    col1, col2 = st.columns(2)
+    # Add filters in columns
+    col1, col2, col3 = st.columns(3)
+    
     with col1:
-        min_actions = st.slider("Minimum Actions Filter", 
-                              min_value=0, 
-                              max_value=int(stats['Total Actions'].max()), 
-                              value=20,
-                              help="Filter out lineups with fewer actions to improve reliability")
+        selected_team = st.selectbox(
+            "Filter by Team",
+            ["All Teams"] + teams,
+            help="Show lineups for a specific team"
+        )
     
     with col2:
-        min_games = st.slider("Minimum Games Played", 
-                            min_value=1, 
-                            max_value=int(stats['Games Played'].max()), 
-                            value=2,
-                            help="Filter lineups based on minimum games played")
+        min_actions = st.slider(
+            "Minimum Actions",
+            min_value=0,
+            max_value=int(stats['Total Actions'].max()),
+            value=20,
+            help="Filter out lineups with fewer actions"
+        )
     
-    # Player selection
-    st.subheader("🏀 Select Players to Analyze")
-    selected_players = st.multiselect(
-        "Choose players to see lineups containing them:",
-        options=all_players
-    )
+    with col3:
+        min_games = st.slider(
+            "Minimum Games",
+            min_value=1,
+            max_value=int(stats['Games Played'].max()),
+            value=2,
+            help="Filter lineups based on minimum games played"
+        )
     
     # Apply filters
     filtered_stats = stats[
@@ -3707,195 +4066,210 @@ def display_team_analysis():
         (stats['Games Played'] >= min_games)
     ]
     
-    if selected_players:
-        filtered_stats = filtered_stats[filtered_stats['Lineup'].apply(
-            lambda x: all(player in x for player in selected_players)
-        )]
-        
-        if filtered_stats.empty:
-            st.warning("No lineups found matching the criteria.")
-            return
-        
-        st.write(f"### All Lineups Containing: {', '.join(selected_players)}")
-        st.dataframe(filtered_stats, hide_index=True)
-        
-        # Show player impact stats
-        st.subheader("🏀 Player Impact Analysis")
-        player_stats = []
-        for player in selected_players:
-            if player in player_impact:
-                stats = player_impact[player]
-                player_stats.append({
-                    'Player': player,
-                    'Plus/Minus per 100': stats['Plus_Minus_per_100'],
-                    'Total Actions': stats['Total_Actions'],
-                    'Games Played': stats['Games_Played'],
-                    'Different Lineups': stats['Num_Lineups']
-                })
-        
-        if player_stats:
-            st.write("Individual Player Impact:")
-            player_df = pd.DataFrame(player_stats)
-            st.dataframe(player_df, hide_index=True)
-        
-        # Summary statistics
-        st.subheader("📈 Summary Statistics")
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            st.metric("Total Lineups Found", len(filtered_stats))
-        with col2:
-            st.metric("Avg Games per Lineup", 
-                     round(filtered_stats['Games Played'].mean(), 1))
-        with col3:
-            st.metric("Average Plus/Minus", 
-                     round(filtered_stats['Plus/Minus'].mean(), 1))
-        with col4:
-            st.metric("Max Games by Lineup", 
-                     int(filtered_stats['Games Played'].max()))
+    if selected_team != "All Teams":
+        filtered_stats = filtered_stats[
+            (filtered_stats['Primary Team'] == selected_team) | 
+            (filtered_stats['Teams'].str.contains(selected_team))
+        ]
+    
+    if filtered_stats.empty:
+        st.warning("No lineups found matching the selected criteria.")
+        return
+    
+    # Sort options
+    sort_by = st.selectbox(
+        "Sort by",
+        ["Plus/Minus per 100", "Total Actions", "Games Played", "Reliability"]
+    )
+    
+    sorted_stats = filtered_stats.sort_values(sort_by, ascending=False)
+    
+    # Display main stats table
+    st.subheader("🏀 Lineup Statistics")
+    st.dataframe(sorted_stats, hide_index=True)
+    
+    # Summary statistics
+    st.subheader("📊 Summary Statistics")
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric(
+            "Total Lineups",
+            len(filtered_stats)
+        )
+    with col2:
+        st.metric(
+            "Avg Games per Lineup",
+            f"{filtered_stats['Games Played'].mean():.1f}"
+        )
+    with col3:
+        st.metric(
+            "Avg Plus/Minus per 100",
+            f"{filtered_stats['Plus/Minus per 100'].mean():.1f}"
+        )
+    with col4:
+        st.metric(
+            "Most Used Lineup Actions",
+            int(filtered_stats['Total Actions'].max())
+        )
+    
+    # Add effectiveness visualization
+    st.subheader("📈 Lineup Effectiveness")
+    
+    # Create scatter plot
+    fig = px.scatter(
+        filtered_stats,
+        x='Reliability',
+        y='Plus/Minus per 100',
+        size='Games Played',
+        color='Primary Team',
+        hover_data=['Lineup', 'Games Played', 'Total Actions'],
+        title='Lineup Effectiveness vs Reliability'
+    )
+    
+    st.plotly_chart(fig)
 
+ # After displaying the main lineup stats, add:
+    if not stats.empty:
+        display_pattern_analysis(stats, player_impact)
 
-def get_four_factors_winners(db_path):
-    """
-    Analyze how often teams with better four factor stats win their games.
-    Returns DataFrame with win percentages for each four factor.
-    """
+    # Add after your main statistics display:
+    if not stats.empty:
+        display_player_impact_analysis(filtered_stats) 
+
+import sqlite3
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import streamlit as st
+
+def analyze_four_factors_wins(db_path="database.db"):
+    """Analyze how often teams with better four factor stats win their games."""
+    
+    # Connect to database
     conn = sqlite3.connect(db_path)
     
-    # Get all games with team stats
+    # Query to get game data with four factors for each team
     query = """
-    WITH GameTeams AS (
-        SELECT 
-            t1.game_id,
-            t1.name AS team1_name,
-            t2.name AS team2_name,
-            (t1.p1_score + t1.p2_score + t1.p3_score + t1.p4_score) AS team1_score,
-            (t2.p1_score + t2.p2_score + t2.p3_score + t2.p4_score) AS team2_score,
-            -- Calculate four factors for team 1
-            ROUND((t1.field_goals_made + 0.5 * t1.three_pointers_made) * 100.0 / t1.field_goals_attempted, 2) AS team1_eFG,
-            ROUND(t1.turnovers * 100.0 / (t1.field_goals_attempted + 0.44 * t1.free_throws_attempted), 2) AS team1_TOV,
-            ROUND(t1.rebounds_offensive * 100.0 / (t1.rebounds_offensive + t2.rebounds_defensive), 2) AS team1_ORB,
-            ROUND(t1.free_throws_attempted * 100.0 / t1.field_goals_attempted, 2) AS team1_FTR,
-            -- Calculate four factors for team 2
-            ROUND((t2.field_goals_made + 0.5 * t2.three_pointers_made) * 100.0 / t2.field_goals_attempted, 2) AS team2_eFG,
-            ROUND(t2.turnovers * 100.0 / (t2.field_goals_attempted + 0.44 * t2.free_throws_attempted), 2) AS team2_TOV,
-            ROUND(t2.rebounds_offensive * 100.0 / (t2.rebounds_offensive + t1.rebounds_defensive), 2) AS team2_ORB,
-            ROUND(t2.free_throws_attempted * 100.0 / t2.field_goals_attempted, 2) AS team2_FTR
-        FROM Teams t1
-        JOIN Teams t2 ON t1.game_id = t2.game_id AND t1.tm = 1 AND t2.tm = 2
-    )
     SELECT 
-        *,
-        -- Determine winner by score (1 = team1 won, 2 = team2 won)
-        CASE WHEN team1_score > team2_score THEN 1 
-             WHEN team1_score < team2_score THEN 2
-             ELSE 0 END AS winner,
-        -- Determine which team had better four factors
-        CASE WHEN team1_eFG > team2_eFG THEN 1 
-             WHEN team1_eFG < team2_eFG THEN 2
-             ELSE 0 END AS better_eFG,
-        -- For TOV%, lower is better, so we invert the comparison
-        CASE WHEN team1_TOV < team2_TOV THEN 1 
-             WHEN team1_TOV > team2_TOV THEN 2
-             ELSE 0 END AS better_TOV,
-        CASE WHEN team1_ORB > team2_ORB THEN 1 
-             WHEN team1_ORB < team2_ORB THEN 2
-             ELSE 0 END AS better_ORB,
-        CASE WHEN team1_FTR > team2_FTR THEN 1 
-             WHEN team1_FTR < team2_FTR THEN 2
-             ELSE 0 END AS better_FTR
-    FROM GameTeams
+        t1.game_id,
+        t1.name AS team1,
+        t2.name AS team2,
+        (t1.p1_score + t1.p2_score + t1.p3_score + t1.p4_score) AS score1,
+        (t2.p1_score + t2.p2_score + t2.p3_score + t2.p4_score) AS score2,
+        
+        -- Calculate four factors for team 1
+        (t1.field_goals_made + 0.5 * t1.three_pointers_made) * 100.0 / NULLIF(t1.field_goals_attempted, 0) AS efg1,
+        t1.turnovers * 100.0 / NULLIF((t1.field_goals_attempted + 0.44 * t1.free_throws_attempted), 0) AS tov1,
+        t1.rebounds_offensive * 100.0 / NULLIF((t1.rebounds_offensive + t2.rebounds_defensive), 0) AS orb1,
+        t1.free_throws_attempted * 100.0 / NULLIF(t1.field_goals_attempted, 0) AS ftr1,
+        
+        -- Calculate four factors for team 2
+        (t2.field_goals_made + 0.5 * t2.three_pointers_made) * 100.0 / NULLIF(t2.field_goals_attempted, 0) AS efg2, 
+        t2.turnovers * 100.0 / NULLIF((t2.field_goals_attempted + 0.44 * t2.free_throws_attempted), 0) AS tov2,
+        t2.rebounds_offensive * 100.0 / NULLIF((t2.rebounds_offensive + t1.rebounds_defensive), 0) AS orb2,
+        t2.free_throws_attempted * 100.0 / NULLIF(t2.field_goals_attempted, 0) AS ftr2
+        
+    FROM Teams t1
+    JOIN Teams t2 ON t1.game_id = t2.game_id 
+    WHERE t1.tm = 1 AND t2.tm = 2
     """
     
-    df = pd.read_sql_query(query, conn)
+    # Execute query and load into DataFrame
+    df = pd.read_sql(query, conn)
     conn.close()
     
-    if df.empty:
-        return pd.DataFrame()
-        
-    # Calculate win percentages for each four factor
-    results = {
-        'Factor': [],
-        'Win Count': [],
-        'Total Games': [],
-        'Win Percentage': []
+    # Drop games with null values in any four factor stat
+    df = df.dropna()
+    
+    # Determine winner (1 for team1, 2 for team2)
+    df['winner'] = (df['score1'] < df['score2']).astype(int) + 1
+    
+    # For each four factor, determine which team had the better stat
+    # Note: For TOV%, lower is better, so we invert the comparison
+    df['better_efg'] = (df['efg1'] < df['efg2']).astype(int) + 1  
+    df['better_tov'] = (df['tov1'] > df['tov2']).astype(int) + 1  # Lower TOV% is better
+    df['better_orb'] = (df['orb1'] < df['orb2']).astype(int) + 1
+    df['better_ftr'] = (df['ftr1'] < df['ftr2']).astype(int) + 1
+    
+    # Calculate results for each factor
+    results = {}
+    
+    factor_names = {
+        'efg': 'Shooting (eFG%)',
+        'tov': 'Turnovers (TOV%)',
+        'orb': 'Offensive Rebounding (ORB%)', 
+        'ftr': 'Free Throw Rate (FTR)'
     }
     
-    # Process each four factor
-    for factor in ['eFG', 'TOV', 'ORB', 'FTR']:
-        # Count games where the team with better factor won
-        factor_col = f'better_{factor}'
-        factor_wins = sum((df[factor_col] == 1) & (df['winner'] == 1)) + sum((df[factor_col] == 2) & (df['winner'] == 2))
+    for factor, factor_name in factor_names.items():
+        # Count games where team with better factor won
+        better_col = f'better_{factor}'
+        win_count = sum(df[better_col] == df['winner'])
+        total_count = len(df)
+        win_pct = win_count / total_count * 100 if total_count > 0 else 0
         
-        # Count total games where there was a clear better team for this factor (excluding ties)
-        factor_total = sum(df[factor_col] != 0)
-        
-        # Calculate win percentage
-        win_pct = (factor_wins / factor_total * 100) if factor_total > 0 else 0
-        
-        results['Factor'].append(factor)
-        results['Win Count'].append(factor_wins)
-        results['Total Games'].append(factor_total)
-        results['Win Percentage'].append(win_pct)
+        results[factor] = {
+            'Factor': factor_name,
+            'Win Count': win_count,
+            'Total Games': total_count,
+            'Win Percentage': win_pct
+        }
     
-    # Create DataFrame with results
-    return pd.DataFrame(results)
+    # Convert to DataFrame
+    results_df = pd.DataFrame(list(results.values()))
+    
+    # Sort by win percentage
+    results_df = results_df.sort_values('Win Percentage', ascending=False)
+    
+    return df, results_df
 
-def display_four_factors_win_analysis():
+def display_four_factors_analysis():
     """Display the four factors win analysis in Streamlit."""
     st.title("🏀 Four Factors Win Analysis")
     st.write("""
     ## How often do teams with better Four Factor stats win their games?
     
-    According to Dean Oliver's Four Factors of Basketball Success, these are the most important aspects that determine winning:
-    1. **Shooting (eFG%)** - Effective Field Goal Percentage
-    2. **Turnovers (TOV%)** - Turnover Percentage
-    3. **Rebounding (ORB%)** - Offensive Rebounding Percentage 
-    4. **Free Throws (FTR)** - Free Throw Rate
-    
-    Let's analyze how well each factor correlates with winning in our dataset.
+    This analysis examines how well Dean Oliver's Four Factors of Basketball Success
+    predict game outcomes. For each factor, we calculate how often the team with 
+    the better stat won the game.
     """)
     
     # Get the data
-    df_results = get_four_factors_winners(db_path)
+    df, results_df = analyze_four_factors_wins()
     
-    if df_results.empty:
+    if df.empty:
         st.warning("No data available for analysis.")
         return
-        
-    # Format the results for display
-    df_display = df_results.copy()
-    df_display['Win Percentage'] = df_display['Win Percentage'].round(2)
     
-    # Replace factor codes with descriptive names
-    factor_names = {
-        'eFG': 'Shooting (eFG%)',
-        'TOV': 'Ball Control (TOV%)',
-        'ORB': 'Offensive Rebounding (ORB%)',
-        'FTR': 'Free Throw Rate (FTR)'
-    }
-    df_display['Factor'] = df_display['Factor'].map(factor_names)
-    
-    # Sort by win percentage
-    df_display = df_display.sort_values('Win Percentage', ascending=False)
-    
-    # Create bar chart
+    # Create bar chart for win percentages
     fig, ax = plt.subplots(figsize=(10, 6))
-    bar_colors = sns.color_palette("viridis", len(df_display))
-    bars = ax.bar(df_display['Factor'], df_display['Win Percentage'], color=bar_colors)
+    
+    # Use nicer color palette
+    bar_colors = sns.color_palette("viridis", len(results_df))
+    
+    # Create bars
+    bars = ax.bar(
+        results_df['Factor'], 
+        results_df['Win Percentage'], 
+        color=bar_colors
+    )
     
     # Add percentage labels on top of bars
     for bar in bars:
         height = bar.get_height()
-        ax.text(bar.get_x() + bar.get_width()/2., height + 1,
-                f'{height:.1f}%', ha='center', va='bottom', fontweight='bold')
-    
-    # Add baseline at 50%
-    ax.axhline(y=50, color='gray', linestyle='--', alpha=0.7)
-    ax.text(0.02, 51, 'Random chance (50%)', fontsize=9, color='gray')
+        ax.text(
+            bar.get_x() + bar.get_width()/2., 
+            height + 1,
+            f'{height:.1f}%', 
+            ha='center', va='bottom', 
+            fontweight='bold'
+        )
     
     # Add styling
-    ax.set_ylim(0, max(df_display['Win Percentage']) + 10)
+    ax.set_ylim(0, 100)
+    ax.axhline(y=50, color='gray', linestyle='--', alpha=0.7)
+    ax.text(0.1, 51, 'Random chance (50%)', fontsize=9, color='gray')
     ax.set_ylabel('Win Percentage (%)')
     ax.set_title('Win Percentage When Team Has Better Four Factors Stats')
     ax.spines['top'].set_visible(False)
@@ -3904,114 +4278,24 @@ def display_four_factors_win_analysis():
     # Display the chart
     st.pyplot(fig)
     
-    # Display the data table with metrics
-    st.subheader("Detailed Win Percentages")
+    # Display metrics
+    st.subheader("Win Percentages by Factor")
     
-    col1, col2, col3, col4 = st.columns(4)
-    for i, row in df_display.iterrows():
-        factor = row['Factor']
-        win_pct = row['Win Percentage']
-        win_count = row['Win Count']
-        total = row['Total Games']
-        
-        with st.columns(1)[0]:
+    cols = st.columns(len(results_df))
+    for i, (_, row) in enumerate(results_df.iterrows()):
+        with cols[i]:
             st.metric(
-                label=factor,
-                value=f"{win_pct:.1f}%",
-                delta=f"{win_count}/{total} games"
+                label=row['Factor'],
+                value=f"{row['Win Percentage']:.1f}%",
+                delta=f"{row['Win Count']}/{row['Total Games']} games"
             )
     
-    # More detailed analysis
-    st.subheader("Additional Insights")
+    # Display detailed table
+    st.subheader("Detailed Results")
     
-    # Calculate how often teams win when they have better stats in multiple factors
-    factor_columns = ['better_eFG', 'better_TOV', 'better_ORB', 'better_FTR']
-    
-    # Create advantage count (how many factors a team is better in)
-    for team in [1, 2]:
-        df[f'team{team}_advantages'] = sum((df[col] == team) for col in factor_columns)
-    
-    # Create analysis for advantage counts
-    advantage_results = []
-    
-    for adv_count in range(1, 5):  # 1 to 4 factors
-        # Count wins for team 1 with this many advantages
-        team1_wins = sum((df['team1_advantages'] == adv_count) & (df['winner'] == 1))
-        team1_games = sum(df['team1_advantages'] == adv_count)
-        
-        # Count wins for team 2 with this many advantages
-        team2_wins = sum((df['team2_advantages'] == adv_count) & (df['winner'] == 2))
-        team2_games = sum(df['team2_advantages'] == adv_count)
-        
-        # Combine results
-        total_wins = team1_wins + team2_wins
-        total_games = team1_games + team2_games
-        win_pct = (total_wins / total_games * 100) if total_games > 0 else 0
-        
-        advantage_results.append({
-            'Factors Better': adv_count,
-            'Win Count': total_wins,
-            'Total Games': total_games,
-            'Win Percentage': win_pct
-        })
-    
-    advantage_df = pd.DataFrame(advantage_results)
-    
-    # Create another chart for advantage counts
-    fig2, ax2 = plt.subplots(figsize=(10, 6))
-    bars = ax2.bar(advantage_df['Factors Better'], advantage_df['Win Percentage'], 
-             color=sns.color_palette("rocket", len(advantage_df)))
-    
-    # Add percentage labels on top of bars
-    for bar in bars:
-        height = bar.get_height()
-        ax2.text(bar.get_x() + bar.get_width()/2., height + 1,
-                f'{height:.1f}%', ha='center', va='bottom', fontweight='bold')
-    
-    # Add random chance line
-    ax2.axhline(y=50, color='gray', linestyle='--', alpha=0.7)
-    ax2.text(0.8, 51, 'Random chance (50%)', fontsize=9, color='gray')
-    
-    # Add styling
-    ax2.set_ylim(0, 100)
-    ax2.set_xlabel('Number of Four Factors Where Team is Better')
-    ax2.set_ylabel('Win Percentage (%)')
-    ax2.set_title('Win Percentage by Number of Four Factors Advantages')
-    ax2.spines['top'].set_visible(False)
-    ax2.spines['right'].set_visible(False)
-    
-    st.pyplot(fig2)
-    
-    # Final insights
-    st.write("### Key Takeaways")
-    
-    most_important = df_display.iloc[0]['Factor']
-    least_important = df_display.iloc[-1]['Factor']
-    
-    st.write(f"""
-    - **{most_important}** is the most predictive factor of winning ({df_display.iloc[0]['Win Percentage']:.1f}%)
-    - Teams with better stats in 3 or more factors win approximately {advantage_df.iloc[2:]['Win Percentage'].mean():.1f}% of their games
-    - Having an advantage in just one factor gives only a small edge over random chance
-    - {least_important} appears to be the least predictive of the four factors in this dataset
-    """)
-    
-    # Show all game data in an expander
-    with st.expander("Show Raw Game Data"):
-        # Calculate point differential
-        df['Point Differential'] = df['team1_score'] - df['team2_score']
-        
-        # Rename columns for better readability
-        display_cols = [
-            'game_id', 'team1_name', 'team2_name',
-            'team1_score', 'team2_score', 'Point Differential',
-            'team1_eFG', 'team2_eFG',
-            'team1_TOV', 'team2_TOV',
-            'team1_ORB', 'team2_ORB',
-            'team1_FTR', 'team2_FTR'
-        ]
-        
-        # Display formatted data
-        st.dataframe(df[display_cols])
+    # Format win percentage for display
+    display_df = results_df
+
 def main():
     st.title("🏀 Basketball Stats Viewer")
     page = st.sidebar.selectbox("📌 Choose a page", ["Team Season Boxscore", "Shot Chart","Match report", "Four Factors", "Lebron", "Play by Play", "Match Detail", "Five Player Segments", "Team Lineup Analysis"])
@@ -4095,8 +4379,8 @@ def main():
             else:
                 st.warning(f"No match data available for {team1}.")
 
-	display_four_factors_win_analysis()
-	
+        display_four_factors_analysis()
+
     elif page == "Match report":
         display_match_report()
 
@@ -4185,7 +4469,7 @@ def main():
             else:
                 st.warning("No data available for Assists vs Turnovers")
 
-        	display_avg_substitutions_graph()
+            display_avg_substitutions_graph()
 
     elif page == "Head-to-Head Comparison":
         df = fetch_team_data()

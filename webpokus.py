@@ -4095,8 +4095,7 @@ def main():
             else:
                 st.warning(f"No match data available for {team1}.")
 
-	if __name__ == "__main__":
-    	display_four_factors_win_analysis()
+	display_four_factors_win_analysis()
 	
     elif page == "Match report":
         display_match_report()

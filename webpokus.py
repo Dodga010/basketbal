@@ -4955,7 +4955,652 @@ def display_basketball_stats_win_analysis():
         # Display the four factors comparison
         st.write("##### Four Factors Comparison")
         st.dataframe(four_factors_comparison)
+
+import os
+import sqlite3
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import streamlit as st
+from datetime import datetime
+
+# Define SQLite database path
+db_path = os.path.join(os.path.dirname(__file__), "database.db")
+
+def analyze_team_comparison(team1_name, team2_name):
+    """
+    Analyze strengths and weaknesses between two teams based on:
+    - Head-to-head matchups
+    - Overall season stats
+    - Four factors comparison
+    - Key statistical categories
+    
+    Parameters:
+    -----------
+    team1_name : str
+        Name of first team to compare
+    team2_name : str
+        Name of second team to compare
+    
+    Returns:
+    --------
+    dict
+        Dictionary containing all comparison results
+    """
+    # Connect to database
+    conn = sqlite3.connect(db_path)
+    
+    # Results dictionary
+    results = {
+        'head_to_head': {},
+        'season_stats': {},
+        'four_factors': {},
+        'strengths_weaknesses': {}
+    }
+    
+    # 1. Head-to-head matchups
+    h2h_query = """
+    WITH team1_matches AS (
+        SELECT 
+            t1.game_id,
+            t1.name AS team1_name,
+            t2.name AS team2_name,
+            (t1.p1_score + t1.p2_score + t1.p3_score + t1.p4_score) AS team1_score,
+            (t2.p1_score + t2.p2_score + t2.p3_score + t2.p4_score) AS team2_score
+        FROM Teams t1
+        JOIN Teams t2 ON t1.game_id = t2.game_id AND t1.tm != t2.tm
+        WHERE t1.name = ? AND t2.name = ?
+    ),
+    team2_matches AS (
+        SELECT 
+            t1.game_id,
+            t2.name AS team1_name,
+            t1.name AS team2_name,
+            (t2.p1_score + t2.p2_score + t2.p3_score + t2.p4_score) AS team1_score,
+            (t1.p1_score + t1.p2_score + t1.p3_score + t1.p4_score) AS team2_score
+        FROM Teams t1
+        JOIN Teams t2 ON t1.game_id = t2.game_id AND t1.tm != t2.tm
+        WHERE t1.name = ? AND t2.name = ?
+    )
+    SELECT * FROM team1_matches
+    UNION
+    SELECT * FROM team2_matches
+    ORDER BY game_id
+    """
+    
+    h2h_df = pd.read_sql_query(h2h_query, conn, params=(team1_name, team2_name, team2_name, team1_name))
+    
+    # Calculate head-to-head record
+    if not h2h_df.empty:
+        team1_wins = sum((h2h_df['team1_name'] == team1_name) & 
+                          (h2h_df['team1_score'] > h2h_df['team2_score']) | 
+                          (h2h_df['team2_name'] == team1_name) & 
+                          (h2h_df['team2_score'] > h2h_df['team1_score']))
+                          
+        team2_wins = sum((h2h_df['team1_name'] == team2_name) & 
+                          (h2h_df['team1_score'] > h2h_df['team2_score']) | 
+                          (h2h_df['team2_name'] == team2_name) & 
+                          (h2h_df['team2_score'] > h2h_df['team1_score']))
         
+        results['head_to_head'] = {
+            'team1_wins': int(team1_wins),
+            'team2_wins': int(team2_wins),
+            'total_games': len(h2h_df),
+            'matchup_details': h2h_df.to_dict('records')
+        }
+    else:
+        results['head_to_head'] = {
+            'team1_wins': 0,
+            'team2_wins': 0,
+            'total_games': 0,
+            'matchup_details': []
+        }
+    
+    # 2. Overall season stats
+    season_query = """
+    SELECT 
+        name AS team_name,
+        COUNT(DISTINCT game_id) AS games_played,
+        AVG(p1_score + p2_score + p3_score + p4_score) AS avg_points,
+        AVG(field_goals_made) AS avg_fg_made,
+        AVG(field_goals_attempted) AS avg_fg_attempted,
+        AVG(field_goal_percentage) AS avg_fg_pct,
+        AVG(three_pointers_made) AS avg_3p_made,
+        AVG(three_pointers_attempted) AS avg_3p_attempted,
+        AVG(three_point_percentage) AS avg_3p_pct,
+        AVG(free_throws_made) AS avg_ft_made,
+        AVG(free_throws_attempted) AS avg_ft_attempted,
+        AVG(free_throw_percentage) AS avg_ft_pct,
+        AVG(rebounds_total) AS avg_rebounds,
+        AVG(rebounds_offensive) AS avg_off_rebounds,
+        AVG(rebounds_defensive) AS avg_def_rebounds,
+        AVG(assists) AS avg_assists,
+        AVG(turnovers) AS avg_turnovers,
+        AVG(steals) AS avg_steals,
+        AVG(blocks) AS avg_blocks,
+        AVG(fouls_total) AS avg_fouls,
+        AVG(points_in_paint) AS avg_paint_points,
+        AVG(points_from_turnovers) AS avg_pts_off_to,
+        AVG(points_second_chance) AS avg_second_chance,
+        AVG(bench_points) AS avg_bench_points
+    FROM Teams
+    WHERE name IN (?, ?)
+    GROUP BY name
+    """
+    
+    season_df = pd.read_sql_query(season_query, conn, params=(team1_name, team2_name))
+    
+    if len(season_df) == 2:
+        # Convert to dict for easier access
+        team1_stats = season_df[season_df['team_name'] == team1_name].iloc[0].to_dict()
+        team2_stats = season_df[season_df['team_name'] == team2_name].iloc[0].to_dict()
+        
+        # Identify stat differences
+        stat_comparisons = {}
+        for stat in season_df.columns:
+            if stat != 'team_name':
+                team1_val = team1_stats[stat]
+                team2_val = team2_stats[stat]
+                diff = team1_val - team2_val
+                
+                # Determine which team is better in this stat
+                # For most stats, higher is better, except for turnovers and fouls
+                is_higher_better = True
+                if 'turnovers' in stat or 'fouls' in stat:
+                    is_higher_better = False
+                
+                better_team = team1_name if (diff > 0 and is_higher_better) or (diff < 0 and not is_higher_better) else team2_name
+                
+                stat_comparisons[stat] = {
+                    'team1_value': float(team1_val),
+                    'team2_value': float(team2_val),
+                    'difference': float(diff),
+                    'better_team': better_team,
+                    'is_significant': abs(diff) > (0.1 * max(team1_val, team2_val))  # 10% difference threshold
+                }
+        
+        results['season_stats'] = {
+            'team1_stats': team1_stats,
+            'team2_stats': team2_stats,
+            'comparisons': stat_comparisons
+        }
+    else:
+        results['season_stats'] = {
+            'team1_stats': {},
+            'team2_stats': {},
+            'comparisons': {}
+        }
+    
+    # 3. Four factors comparison
+    four_factors_query = """
+    SELECT 
+        name AS team_name,
+        AVG((field_goals_made + 0.5 * three_pointers_made) * 100.0 / field_goals_attempted) AS avg_efg_pct,
+        AVG(turnovers * 100.0 / (field_goals_attempted + 0.44 * free_throws_attempted)) AS avg_tov_pct,
+        AVG(rebounds_offensive * 100.0 / (rebounds_offensive + rebounds_defensive)) AS avg_orb_pct,
+        AVG(free_throws_attempted * 100.0 / field_goals_attempted) AS avg_ftr_pct
+    FROM Teams
+    WHERE name IN (?, ?)
+    GROUP BY name
+    """
+    
+    four_factors_df = pd.read_sql_query(four_factors_query, conn, params=(team1_name, team2_name))
+    
+    if len(four_factors_df) == 2:
+        # Convert to dict for easier access
+        team1_factors = four_factors_df[four_factors_df['team_name'] == team1_name].iloc[0].to_dict()
+        team2_factors = four_factors_df[four_factors_df['team_name'] == team2_name].iloc[0].to_dict()
+        
+        # Compare four factors
+        factor_comparisons = {}
+        for factor in ['avg_efg_pct', 'avg_tov_pct', 'avg_orb_pct', 'avg_ftr_pct']:
+            team1_val = team1_factors[factor]
+            team2_val = team2_factors[factor]
+            diff = team1_val - team2_val
+            
+            # Determine which team is better in this factor
+            # For turnover percentage, lower is better
+            is_higher_better = factor != 'avg_tov_pct'
+            
+            better_team = team1_name if (diff > 0 and is_higher_better) or (diff < 0 and not is_higher_better) else team2_name
+            
+            factor_comparisons[factor] = {
+                'team1_value': float(team1_val),
+                'team2_value': float(team2_val),
+                'difference': float(diff),
+                'better_team': better_team,
+                'is_significant': abs(diff) > (0.1 * max(team1_val, team2_val))  # 10% difference threshold
+            }
+        
+        results['four_factors'] = {
+            'team1_factors': team1_factors,
+            'team2_factors': team2_factors,
+            'comparisons': factor_comparisons
+        }
+    else:
+        results['four_factors'] = {
+            'team1_factors': {},
+            'team2_factors': {},
+            'comparisons': {}
+        }
+    
+    # 4. Identify strengths and weaknesses
+    if results['season_stats']['comparisons']:
+        # Find areas where each team excels (significant advantage)
+        team1_strengths = {}
+        team2_strengths = {}
+        
+        for stat, comparison in results['season_stats']['comparisons'].items():
+            if comparison['is_significant']:
+                if comparison['better_team'] == team1_name:
+                    team1_strengths[stat] = comparison
+                else:
+                    team2_strengths[stat] = comparison
+        
+        # Sort strengths by significance (absolute difference / average value)
+        for team_strengths in [team1_strengths, team2_strengths]:
+            for stat, data in team_strengths.items():
+                avg_val = (data['team1_value'] + data['team2_value']) / 2
+                if avg_val != 0:
+                    data['significance_ratio'] = abs(data['difference']) / avg_val
+                else:
+                    data['significance_ratio'] = 0
+        
+        # Sort by significance ratio
+        team1_strengths = {k: v for k, v in sorted(
+            team1_strengths.items(), 
+            key=lambda item: item[1]['significance_ratio'], 
+            reverse=True
+        )}
+        
+        team2_strengths = {k: v for k, v in sorted(
+            team2_strengths.items(), 
+            key=lambda item: item[1]['significance_ratio'], 
+            reverse=True
+        )}
+        
+        results['strengths_weaknesses'] = {
+            'team1_strengths': team1_strengths,
+            'team2_strengths': team2_strengths
+        }
+    
+    # Close database connection
+    conn.close()
+    
+    return results
+
+def display_team_comparison_analysis():
+    """Display team comparison analysis in Streamlit"""
+    st.title("🏀 Team Comparison Analysis")
+    
+    # Current date/time
+    st.markdown(f"*Analysis generated on: 2025-03-28 21:09:04*")
+    st.markdown(f"*Analysis by: Dodga010*")
+    
+    # Team selection
+    teams = fetch_teams()
+    
+    if not teams:
+        st.error("No team data available.")
+        return
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        team1 = st.selectbox("Select First Team", teams, index=0, key="team1")
+    
+    with col2:
+        # Filter out team1 from options for team2
+        team2_options = [team for team in teams if team != team1]
+        team2 = st.selectbox("Select Second Team", team2_options, index=0, key="team2")
+    
+    if team1 and team2 and team1 != team2:
+        # Run comparison analysis
+        with st.spinner(f"Analyzing {team1} vs {team2}..."):
+            comparison_results = analyze_team_comparison(team1, team2)
+        
+        # 1. Head-to-head record
+        st.header("📊 Head-to-Head Results")
+        
+        h2h_data = comparison_results['head_to_head']
+        total_games = h2h_data['total_games']
+        
+        if total_games > 0:
+            team1_wins = h2h_data['team1_wins']
+            team2_wins = h2h_data['team2_wins']
+            
+            # Create columns for the H2H record
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.metric(team1, team1_wins)
+            
+            with col2:
+                st.metric("Games Played", total_games)
+            
+            with col3:
+                st.metric(team2, team2_wins)
+            
+            # Display matchup details
+            st.subheader("Game Details")
+            
+            # Create a more readable dataframe for display
+            games_df = pd.DataFrame(h2h_data['matchup_details'])
+            
+            # Format for display
+            display_games = []
+            for _, game in games_df.iterrows():
+                if game['team1_name'] == team1:
+                    team1_score = game['team1_score']
+                    team2_score = game['team2_score']
+                else:
+                    team1_score = game['team2_score']
+                    team2_score = game['team1_score']
+                
+                winner = team1 if team1_score > team2_score else team2
+                
+                display_games.append({
+                    'Game ID': game['game_id'],
+                    f'{team1} Score': int(team1_score),
+                    f'{team2} Score': int(team2_score),
+                    'Winner': winner,
+                    'Margin': abs(int(team1_score) - int(team2_score))
+                })
+            
+            st.table(pd.DataFrame(display_games))
+        else:
+            st.info(f"No head-to-head games found between {team1} and {team2}.")
+        
+        # 2. Season Stats Comparison
+        st.header("📈 Season Statistics Comparison")
+        
+        season_stats = comparison_results['season_stats']
+        
+        if season_stats['comparisons']:
+            # Create a dataframe for the key stats
+            key_stats = [
+                'avg_points', 'avg_fg_pct', 'avg_3p_pct', 'avg_ft_pct',
+                'avg_rebounds', 'avg_assists', 'avg_turnovers', 'avg_steals', 'avg_blocks'
+            ]
+            
+            stat_display_names = {
+                'avg_points': 'Points',
+                'avg_fg_pct': 'FG%',
+                'avg_3p_pct': '3P%',
+                'avg_ft_pct': 'FT%',
+                'avg_rebounds': 'Rebounds',
+                'avg_assists': 'Assists',
+                'avg_turnovers': 'Turnovers',
+                'avg_steals': 'Steals',
+                'avg_blocks': 'Blocks'
+            }
+            
+            stats_df = pd.DataFrame({
+                'Statistic': [stat_display_names.get(stat, stat) for stat in key_stats],
+                team1: [round(season_stats['team1_stats'][stat], 1) for stat in key_stats],
+                team2: [round(season_stats['team2_stats'][stat], 1) for stat in key_stats],
+                'Difference': [round(season_stats['comparisons'][stat]['difference'], 1) for stat in key_stats],
+                'Better Team': [season_stats['comparisons'][stat]['better_team'] for stat in key_stats]
+            })
+            
+            # Display stats table
+            st.table(stats_df.set_index('Statistic'))
+            
+            # Create a radar chart for visual comparison
+            fig = create_radar_chart(season_stats, team1, team2, key_stats, stat_display_names)
+            st.pyplot(fig)
+            
+            # Additional important stats section
+            st.subheader("Additional Key Statistics")
+            
+            additional_stats = [
+                'avg_paint_points', 'avg_pts_off_to', 'avg_second_chance', 'avg_bench_points'
+            ]
+            
+            additional_display_names = {
+                'avg_paint_points': 'Points in Paint',
+                'avg_pts_off_to': 'Points off Turnovers',
+                'avg_second_chance': 'Second Chance Points',
+                'avg_bench_points': 'Bench Points'
+            }
+            
+            additional_df = pd.DataFrame({
+                'Statistic': [additional_display_names.get(stat, stat) for stat in additional_stats],
+                team1: [round(season_stats['team1_stats'][stat], 1) for stat in additional_stats],
+                team2: [round(season_stats['team2_stats'][stat], 1) for stat in additional_stats],
+                'Difference': [round(season_stats['comparisons'][stat]['difference'], 1) for stat in additional_stats],
+                'Better Team': [season_stats['comparisons'][stat]['better_team'] for stat in additional_stats]
+            })
+            
+            # Display additional stats table
+            st.table(additional_df.set_index('Statistic'))
+        
+        else:
+            st.info("Season statistics comparison not available.")
+        
+        # 3. Four Factors Analysis
+        st.header("🔍 Four Factors Analysis")
+        
+        four_factors = comparison_results['four_factors']
+        
+        if four_factors['comparisons']:
+            factor_display_names = {
+                'avg_efg_pct': 'Effective Field Goal %',
+                'avg_tov_pct': 'Turnover %',
+                'avg_orb_pct': 'Offensive Rebound %',
+                'avg_ftr_pct': 'Free Throw Rate'
+            }
+            
+            factors_df = pd.DataFrame({
+                'Factor': list(factor_display_names.values()),
+                team1: [round(four_factors['team1_factors'][factor], 1) for factor in factor_display_names.keys()],
+                team2: [round(four_factors['team2_factors'][factor], 1) for factor in factor_display_names.keys()],
+                'Difference': [round(four_factors['comparisons'][factor]['difference'], 1) for factor in factor_display_names.keys()],
+                'Better Team': [four_factors['comparisons'][factor]['better_team'] for factor in factor_display_names.keys()],
+                'Is Significant': [four_factors['comparisons'][factor]['is_significant'] for factor in factor_display_names.keys()]
+            })
+            
+            # Display four factors table
+            st.table(factors_df.set_index('Factor'))
+            
+            # Create bar chart for visual comparison
+            fig, ax = plt.subplots(figsize=(10, 6))
+            x = np.arange(len(factor_display_names))
+            width = 0.35
+            
+            team1_values = [four_factors['team1_factors'][factor] for factor in factor_display_names.keys()]
+            team2_values = [four_factors['team2_factors'][factor] for factor in factor_display_names.keys()]
+            
+            rects1 = ax.bar(x - width/2, team1_values, width, label=team1)
+            rects2 = ax.bar(x + width/2, team2_values, width, label=team2)
+            
+            ax.set_ylabel('Value')
+            ax.set_title('Four Factors Comparison')
+            ax.set_xticks(x)
+            ax.set_xticklabels(list(factor_display_names.values()))
+            ax.legend()
+            
+            plt.xticks(rotation=45)
+            plt.tight_layout()
+            
+            st.pyplot(fig)
+        
+        else:
+            st.info("Four factors comparison not available.")
+        
+        # 4. Strengths and Weaknesses Analysis
+        st.header("💪 Team Strengths Analysis")
+        
+        strengths = comparison_results['strengths_weaknesses']
+        
+        if strengths:
+            col1, col2 = st.columns(2)
+            
+            # Team 1 Strengths
+            with col1:
+                st.subheader(f"{team1} Strengths")
+                
+                if strengths['team1_strengths']:
+                    strength_items = []
+                    for stat, data in list(strengths['team1_strengths'].items())[:5]:  # Top 5 strengths
+                        # Format stat name for display
+                        display_stat = stat.replace('avg_', '').replace('_', ' ').title()
+                        
+                        # Calculate percentage difference
+                        pct_diff = (data['difference'] / data['team2_value'] * 100) if data['team2_value'] != 0 else 0
+                        
+                        strength_items.append({
+                            'Statistic': display_stat,
+                            'Value': round(data['team1_value'], 2),
+                            'Advantage': f"{round(abs(pct_diff), 1)}% better"
+                        })
+                    
+                    st.table(pd.DataFrame(strength_items).set_index('Statistic'))
+                else:
+                    st.info(f"No significant statistical advantages found for {team1}.")
+            
+            # Team 2 Strengths
+            with col2:
+                st.subheader(f"{team2} Strengths")
+                
+                if strengths['team2_strengths']:
+                    strength_items = []
+                    for stat, data in list(strengths['team2_strengths'].items())[:5]:  # Top 5 strengths
+                        # Format stat name for display
+                        display_stat = stat.replace('avg_', '').replace('_', ' ').title()
+                        
+                        # Calculate percentage difference
+                        pct_diff = (data['difference'] / data['team1_value'] * 100) if data['team1_value'] != 0 else 0
+                        
+                        strength_items.append({
+                            'Statistic': display_stat,
+                            'Value': round(data['team2_value'], 2),
+                            'Advantage': f"{round(abs(pct_diff), 1)}% better"
+                        })
+                    
+                    st.table(pd.DataFrame(strength_items).set_index('Statistic'))
+                else:
+                    st.info(f"No significant statistical advantages found for {team2}.")
+        
+        # 5. Matchup Analysis and Prediction
+        st.header("🔮 Matchup Analysis")
+        
+        # Count advantages in important categories
+        if season_stats['comparisons']:
+            team1_advantages = 0
+            team2_advantages = 0
+            important_stats = [
+                'avg_points', 'avg_fg_pct', 'avg_3p_pct',
+                'avg_rebounds', 'avg_assists', 'avg_steals'
+            ]
+            
+            for stat in important_stats:
+                if stat in season_stats['comparisons']:
+                    if season_stats['comparisons'][stat]['better_team'] == team1:
+                        team1_advantages += 1
+                    else:
+                        team2_advantages += 1
+            
+            # Four factors advantages
+            for factor in four_factors['comparisons']:
+                if four_factors['comparisons'][factor]['better_team'] == team1:
+                    team1_advantages += 1
+                else:
+                    team2_advantages += 1
+            
+            # Head-to-head record
+            if h2h_data['team1_wins'] > h2h_data['team2_wins']:
+                team1_advantages += 1
+            elif h2h_data['team2_wins'] > h2h_data['team1_wins']:
+                team2_advantages += 1
+            
+            # Display prediction
+            st.subheader("Matchup Advantages")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.metric(team1, team1_advantages)
+            
+            with col2:
+                st.metric(team2, team2_advantages)
+            
+            favored_team = team1 if team1_advantages > team2_advantages else team2
+            advantage_diff = abs(team1_advantages - team2_advantages)
+            
+            if advantage_diff >= 5:
+                st.write(f"**Significant advantage for {favored_team}** with {advantage_diff} more statistical edges.")
+            elif advantage_diff >= 3:
+                st.write(f"**Moderate advantage for {favored_team}** with {advantage_diff} more statistical edges.")
+            elif advantage_diff >= 1:
+                st.write(f"**Slight advantage for {favored_team}** with {advantage_diff} more statistical edges.")
+            else:
+                st.write("**Even matchup** with both teams having similar statistical profiles.")
+
+def create_radar_chart(season_stats, team1, team2, key_stats, stat_display_names):
+    """Create a radar chart comparing the two teams"""
+    # Normalize the values
+    max_values = {}
+    for stat in key_stats:
+        max_values[stat] = max(season_stats['team1_stats'][stat], season_stats['team2_stats'][stat])
+    
+    # For stats where lower is better (like turnovers), invert the normalization
+    inverted_stats = ['avg_turnovers']
+    
+    team1_values = []
+    team2_values = []
+    for stat in key_stats:
+        if max_values[stat] > 0:
+            if stat in inverted_stats:
+                team1_values.append(1 - (season_stats['team1_stats'][stat] / max_values[stat]))
+                team2_values.append(1 - (season_stats['team2_stats'][stat] / max_values[stat]))
+            else:
+                team1_values.append(season_stats['team1_stats'][stat] / max_values[stat])
+                team2_values.append(season_stats['team2_stats'][stat] / max_values[stat])
+        else:
+            team1_values.append(0)
+            team2_values.append(0)
+    
+    # Set up the radar chart
+    labels = [stat_display_names.get(stat, stat) for stat in key_stats]
+    
+    # Create the angles for each statistic (ensure same number of points as values)
+    angles = np.linspace(0, 2*np.pi, len(labels), endpoint=False).tolist()
+    
+    # Close the polygon by appending the first value to the end
+    team1_values.append(team1_values[0])
+    team2_values.append(team2_values[0])
+    angles.append(angles[0])  # Close the loop
+    labels.append(labels[0])  # Add the first label to close the loop
+    
+    fig, ax = plt.subplots(figsize=(8, 8), subplot_kw=dict(polar=True))
+    
+    # Draw the chart - now angles and values have the same length
+    ax.plot(angles, team1_values, 'o-', linewidth=2, label=team1, color='blue')
+    ax.fill(angles, team1_values, alpha=0.1, color='blue')
+    
+    ax.plot(angles, team2_values, 'o-', linewidth=2, label=team2, color='red')
+    ax.fill(angles, team2_values, alpha=0.1, color='red')
+    
+    # Set labels - make sure to use only the original labels (not the duplicated one)
+    ax.set_thetagrids(np.degrees(angles[:-1]), labels[:-1])
+    
+    # Add legend
+    ax.legend(loc='upper right', bbox_to_anchor=(0.1, 0.1))
+    
+    ax.set_title(f"Team Stats Comparison: {team1} vs {team2}")
+    
+    return fig
+
+def fetch_teams():
+    """Fetch all team names from database"""
+    conn = sqlite3.connect(db_path)
+    query = "SELECT DISTINCT name FROM Teams ORDER BY name"
+    teams = pd.read_sql_query(query, conn)["name"].tolist()
+    conn.close()
+    return teams
+
 
 def main():
     st.title("🏀 Basketball Stats Viewer")
@@ -5042,7 +5687,8 @@ def main():
 
         display_four_factors_analysis()
         display_basketball_stats_win_analysis()
-        
+        display_team_comparison_analysis()
+
     elif page == "Match report":
         display_match_report()
 

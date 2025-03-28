@@ -4185,7 +4185,7 @@ def main():
             else:
                 st.warning("No data available for Assists vs Turnovers")
 
-            display_avg_substitutions_graph()
+        	display_avg_substitutions_graph()
 
     elif page == "Head-to-Head Comparison":
         df = fetch_team_data()

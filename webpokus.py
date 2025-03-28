@@ -3754,6 +3754,264 @@ def display_team_analysis():
             st.metric("Max Games by Lineup", 
                      int(filtered_stats['Games Played'].max()))
 
+
+def get_four_factors_winners(db_path):
+    """
+    Analyze how often teams with better four factor stats win their games.
+    Returns DataFrame with win percentages for each four factor.
+    """
+    conn = sqlite3.connect(db_path)
+    
+    # Get all games with team stats
+    query = """
+    WITH GameTeams AS (
+        SELECT 
+            t1.game_id,
+            t1.name AS team1_name,
+            t2.name AS team2_name,
+            (t1.p1_score + t1.p2_score + t1.p3_score + t1.p4_score) AS team1_score,
+            (t2.p1_score + t2.p2_score + t2.p3_score + t2.p4_score) AS team2_score,
+            -- Calculate four factors for team 1
+            ROUND((t1.field_goals_made + 0.5 * t1.three_pointers_made) * 100.0 / t1.field_goals_attempted, 2) AS team1_eFG,
+            ROUND(t1.turnovers * 100.0 / (t1.field_goals_attempted + 0.44 * t1.free_throws_attempted), 2) AS team1_TOV,
+            ROUND(t1.rebounds_offensive * 100.0 / (t1.rebounds_offensive + t2.rebounds_defensive), 2) AS team1_ORB,
+            ROUND(t1.free_throws_attempted * 100.0 / t1.field_goals_attempted, 2) AS team1_FTR,
+            -- Calculate four factors for team 2
+            ROUND((t2.field_goals_made + 0.5 * t2.three_pointers_made) * 100.0 / t2.field_goals_attempted, 2) AS team2_eFG,
+            ROUND(t2.turnovers * 100.0 / (t2.field_goals_attempted + 0.44 * t2.free_throws_attempted), 2) AS team2_TOV,
+            ROUND(t2.rebounds_offensive * 100.0 / (t2.rebounds_offensive + t1.rebounds_defensive), 2) AS team2_ORB,
+            ROUND(t2.free_throws_attempted * 100.0 / t2.field_goals_attempted, 2) AS team2_FTR
+        FROM Teams t1
+        JOIN Teams t2 ON t1.game_id = t2.game_id AND t1.tm = 1 AND t2.tm = 2
+    )
+    SELECT 
+        *,
+        -- Determine winner by score (1 = team1 won, 2 = team2 won)
+        CASE WHEN team1_score > team2_score THEN 1 
+             WHEN team1_score < team2_score THEN 2
+             ELSE 0 END AS winner,
+        -- Determine which team had better four factors
+        CASE WHEN team1_eFG > team2_eFG THEN 1 
+             WHEN team1_eFG < team2_eFG THEN 2
+             ELSE 0 END AS better_eFG,
+        -- For TOV%, lower is better, so we invert the comparison
+        CASE WHEN team1_TOV < team2_TOV THEN 1 
+             WHEN team1_TOV > team2_TOV THEN 2
+             ELSE 0 END AS better_TOV,
+        CASE WHEN team1_ORB > team2_ORB THEN 1 
+             WHEN team1_ORB < team2_ORB THEN 2
+             ELSE 0 END AS better_ORB,
+        CASE WHEN team1_FTR > team2_FTR THEN 1 
+             WHEN team1_FTR < team2_FTR THEN 2
+             ELSE 0 END AS better_FTR
+    FROM GameTeams
+    """
+    
+    df = pd.read_sql_query(query, conn)
+    conn.close()
+    
+    if df.empty:
+        return pd.DataFrame()
+        
+    # Calculate win percentages for each four factor
+    results = {
+        'Factor': [],
+        'Win Count': [],
+        'Total Games': [],
+        'Win Percentage': []
+    }
+    
+    # Process each four factor
+    for factor in ['eFG', 'TOV', 'ORB', 'FTR']:
+        # Count games where the team with better factor won
+        factor_col = f'better_{factor}'
+        factor_wins = sum((df[factor_col] == 1) & (df['winner'] == 1)) + sum((df[factor_col] == 2) & (df['winner'] == 2))
+        
+        # Count total games where there was a clear better team for this factor (excluding ties)
+        factor_total = sum(df[factor_col] != 0)
+        
+        # Calculate win percentage
+        win_pct = (factor_wins / factor_total * 100) if factor_total > 0 else 0
+        
+        results['Factor'].append(factor)
+        results['Win Count'].append(factor_wins)
+        results['Total Games'].append(factor_total)
+        results['Win Percentage'].append(win_pct)
+    
+    # Create DataFrame with results
+    return pd.DataFrame(results)
+
+def display_four_factors_win_analysis():
+    """Display the four factors win analysis in Streamlit."""
+    st.title("🏀 Four Factors Win Analysis")
+    st.write("""
+    ## How often do teams with better Four Factor stats win their games?
+    
+    According to Dean Oliver's Four Factors of Basketball Success, these are the most important aspects that determine winning:
+    1. **Shooting (eFG%)** - Effective Field Goal Percentage
+    2. **Turnovers (TOV%)** - Turnover Percentage
+    3. **Rebounding (ORB%)** - Offensive Rebounding Percentage 
+    4. **Free Throws (FTR)** - Free Throw Rate
+    
+    Let's analyze how well each factor correlates with winning in our dataset.
+    """)
+    
+    # Get the data
+    df_results = get_four_factors_winners(db_path)
+    
+    if df_results.empty:
+        st.warning("No data available for analysis.")
+        return
+        
+    # Format the results for display
+    df_display = df_results.copy()
+    df_display['Win Percentage'] = df_display['Win Percentage'].round(2)
+    
+    # Replace factor codes with descriptive names
+    factor_names = {
+        'eFG': 'Shooting (eFG%)',
+        'TOV': 'Ball Control (TOV%)',
+        'ORB': 'Offensive Rebounding (ORB%)',
+        'FTR': 'Free Throw Rate (FTR)'
+    }
+    df_display['Factor'] = df_display['Factor'].map(factor_names)
+    
+    # Sort by win percentage
+    df_display = df_display.sort_values('Win Percentage', ascending=False)
+    
+    # Create bar chart
+    fig, ax = plt.subplots(figsize=(10, 6))
+    bar_colors = sns.color_palette("viridis", len(df_display))
+    bars = ax.bar(df_display['Factor'], df_display['Win Percentage'], color=bar_colors)
+    
+    # Add percentage labels on top of bars
+    for bar in bars:
+        height = bar.get_height()
+        ax.text(bar.get_x() + bar.get_width()/2., height + 1,
+                f'{height:.1f}%', ha='center', va='bottom', fontweight='bold')
+    
+    # Add baseline at 50%
+    ax.axhline(y=50, color='gray', linestyle='--', alpha=0.7)
+    ax.text(0.02, 51, 'Random chance (50%)', fontsize=9, color='gray')
+    
+    # Add styling
+    ax.set_ylim(0, max(df_display['Win Percentage']) + 10)
+    ax.set_ylabel('Win Percentage (%)')
+    ax.set_title('Win Percentage When Team Has Better Four Factors Stats')
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    
+    # Display the chart
+    st.pyplot(fig)
+    
+    # Display the data table with metrics
+    st.subheader("Detailed Win Percentages")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    for i, row in df_display.iterrows():
+        factor = row['Factor']
+        win_pct = row['Win Percentage']
+        win_count = row['Win Count']
+        total = row['Total Games']
+        
+        with st.columns(1)[0]:
+            st.metric(
+                label=factor,
+                value=f"{win_pct:.1f}%",
+                delta=f"{win_count}/{total} games"
+            )
+    
+    # More detailed analysis
+    st.subheader("Additional Insights")
+    
+    # Calculate how often teams win when they have better stats in multiple factors
+    factor_columns = ['better_eFG', 'better_TOV', 'better_ORB', 'better_FTR']
+    
+    # Create advantage count (how many factors a team is better in)
+    for team in [1, 2]:
+        df[f'team{team}_advantages'] = sum((df[col] == team) for col in factor_columns)
+    
+    # Create analysis for advantage counts
+    advantage_results = []
+    
+    for adv_count in range(1, 5):  # 1 to 4 factors
+        # Count wins for team 1 with this many advantages
+        team1_wins = sum((df['team1_advantages'] == adv_count) & (df['winner'] == 1))
+        team1_games = sum(df['team1_advantages'] == adv_count)
+        
+        # Count wins for team 2 with this many advantages
+        team2_wins = sum((df['team2_advantages'] == adv_count) & (df['winner'] == 2))
+        team2_games = sum(df['team2_advantages'] == adv_count)
+        
+        # Combine results
+        total_wins = team1_wins + team2_wins
+        total_games = team1_games + team2_games
+        win_pct = (total_wins / total_games * 100) if total_games > 0 else 0
+        
+        advantage_results.append({
+            'Factors Better': adv_count,
+            'Win Count': total_wins,
+            'Total Games': total_games,
+            'Win Percentage': win_pct
+        })
+    
+    advantage_df = pd.DataFrame(advantage_results)
+    
+    # Create another chart for advantage counts
+    fig2, ax2 = plt.subplots(figsize=(10, 6))
+    bars = ax2.bar(advantage_df['Factors Better'], advantage_df['Win Percentage'], 
+             color=sns.color_palette("rocket", len(advantage_df)))
+    
+    # Add percentage labels on top of bars
+    for bar in bars:
+        height = bar.get_height()
+        ax2.text(bar.get_x() + bar.get_width()/2., height + 1,
+                f'{height:.1f}%', ha='center', va='bottom', fontweight='bold')
+    
+    # Add random chance line
+    ax2.axhline(y=50, color='gray', linestyle='--', alpha=0.7)
+    ax2.text(0.8, 51, 'Random chance (50%)', fontsize=9, color='gray')
+    
+    # Add styling
+    ax2.set_ylim(0, 100)
+    ax2.set_xlabel('Number of Four Factors Where Team is Better')
+    ax2.set_ylabel('Win Percentage (%)')
+    ax2.set_title('Win Percentage by Number of Four Factors Advantages')
+    ax2.spines['top'].set_visible(False)
+    ax2.spines['right'].set_visible(False)
+    
+    st.pyplot(fig2)
+    
+    # Final insights
+    st.write("### Key Takeaways")
+    
+    most_important = df_display.iloc[0]['Factor']
+    least_important = df_display.iloc[-1]['Factor']
+    
+    st.write(f"""
+    - **{most_important}** is the most predictive factor of winning ({df_display.iloc[0]['Win Percentage']:.1f}%)
+    - Teams with better stats in 3 or more factors win approximately {advantage_df.iloc[2:]['Win Percentage'].mean():.1f}% of their games
+    - Having an advantage in just one factor gives only a small edge over random chance
+    - {least_important} appears to be the least predictive of the four factors in this dataset
+    """)
+    
+    # Show all game data in an expander
+    with st.expander("Show Raw Game Data"):
+        # Calculate point differential
+        df['Point Differential'] = df['team1_score'] - df['team2_score']
+        
+        # Rename columns for better readability
+        display_cols = [
+            'game_id', 'team1_name', 'team2_name',
+            'team1_score', 'team2_score', 'Point Differential',
+            'team1_eFG', 'team2_eFG',
+            'team1_TOV', 'team2_TOV',
+            'team1_ORB', 'team2_ORB',
+            'team1_FTR', 'team2_FTR'
+        ]
+        
+        # Display formatted data
+        st.dataframe(df[display_cols])
 def main():
     st.title("🏀 Basketball Stats Viewer")
     page = st.sidebar.selectbox("📌 Choose a page", ["Team Season Boxscore", "Shot Chart","Match report", "Four Factors", "Lebron", "Play by Play", "Match Detail", "Five Player Segments", "Team Lineup Analysis"])
@@ -3837,6 +4095,9 @@ def main():
             else:
                 st.warning(f"No match data available for {team1}.")
 
+	if __name__ == "__main__":
+    	display_four_factors_win_analysis()
+	
     elif page == "Match report":
         display_match_report()
 

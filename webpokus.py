@@ -4296,6 +4296,667 @@ def display_four_factors_analysis():
     # Format win percentage for display
     display_df = results_df
 
+import os
+import sqlite3
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import streamlit as st
+from datetime import datetime
+
+# Define SQLite database path
+db_path = os.path.join(os.path.dirname(__file__), "database.db")
+
+def analyze_basketball_stats_wins():
+    # Connect to database
+    conn = sqlite3.connect(db_path)
+    
+    # Query to get match data with four factors and other stats for both teams in each game
+    query = """
+    WITH team_matches AS (
+        SELECT 
+            t1.game_id,
+            t1.name AS team1_name,
+            t2.name AS team2_name,
+            (t1.p1_score + t1.p2_score + t1.p3_score + t1.p4_score) AS team1_score,
+            (t2.p1_score + t2.p2_score + t2.p3_score + t2.p4_score) AS team2_score,
+            -- Team 1 Four Factors
+            ROUND((t1.field_goals_made + 0.5 * t1.three_pointers_made) * 100.0 / t1.field_goals_attempted, 2) AS team1_eFG_percentage,
+            ROUND(t1.turnovers * 100.0 / (t1.field_goals_attempted + 0.44 * t1.free_throws_attempted), 2) AS team1_TOV_percentage,
+            ROUND(t1.rebounds_offensive * 100.0 / (t1.rebounds_offensive + t1.rebounds_defensive), 2) AS team1_ORB_percentage,
+            ROUND(t1.free_throws_attempted * 100.0 / t1.field_goals_attempted, 2) AS team1_FTR_percentage,
+            -- Team 2 Four Factors
+            ROUND((t2.field_goals_made + 0.5 * t2.three_pointers_made) * 100.0 / t2.field_goals_attempted, 2) AS team2_eFG_percentage,
+            ROUND(t2.turnovers * 100.0 / (t2.field_goals_attempted + 0.44 * t2.free_throws_attempted), 2) AS team2_TOV_percentage,
+            ROUND(t2.rebounds_offensive * 100.0 / (t2.rebounds_offensive + t2.rebounds_defensive), 2) AS team2_ORB_percentage,
+            ROUND(t2.free_throws_attempted * 100.0 / t2.field_goals_attempted, 2) AS team2_FTR_percentage,
+            
+            -- Additional Stats - Team 1
+            t1.assists AS team1_assists,
+            t1.steals AS team1_steals,
+            t1.blocks AS team1_blocks,
+            t1.rebounds_total AS team1_rebounds,
+            t1.three_pointers_made AS team1_3PM,
+            t1.field_goal_percentage AS team1_FG_percentage,
+            t1.three_point_percentage AS team1_3P_percentage,
+            t1.free_throw_percentage AS team1_FT_percentage,
+            t1.fouls_total AS team1_fouls,
+            t1.biggest_scoring_run AS team1_scoring_run,
+            t1.points_in_paint AS team1_points_in_paint,
+            t1.points_from_turnovers AS team1_points_off_TO,
+            t1.points_fast_break AS team1_fast_break,
+            
+            -- Additional Stats - Team 2
+            t2.assists AS team2_assists,
+            t2.steals AS team2_steals,
+            t2.blocks AS team2_blocks,
+            t2.rebounds_total AS team2_rebounds,
+            t2.three_pointers_made AS team2_3PM,
+            t2.field_goal_percentage AS team2_FG_percentage,
+            t2.three_point_percentage AS team2_3P_percentage,
+            t2.free_throw_percentage AS team2_FT_percentage,
+            t2.fouls_total AS team2_fouls,
+            t2.biggest_scoring_run AS team2_scoring_run,
+            t2.points_in_paint AS team2_points_in_paint,
+            t2.points_from_turnovers AS team2_points_off_TO,
+            t2.points_fast_break AS team2_fast_break
+        FROM Teams t1
+        JOIN Teams t2 ON t1.game_id = t2.game_id AND t1.tm = 1 AND t2.tm = 2
+    )
+    SELECT * FROM team_matches
+    """
+    
+    # Execute query and load data
+    df = pd.read_sql_query(query, conn)
+    conn.close()
+    
+    # Check if we have data
+    if df.empty:
+        return None
+        
+    # Determine winner for each game
+    df['winner'] = 1  # Team 1 is default winner
+    df.loc[df['team2_score'] > df['team1_score'], 'winner'] = 2  # Team 2 is winner if they scored more
+    
+    # For games with ties (if any), consider them as no winner
+    df.loc[df['team1_score'] == df['team2_score'], 'winner'] = 0
+    
+    # ------------- FOUR FACTORS ANALYSIS -------------
+    
+    # Determine which team had the advantage in each factor
+    # For eFG% (higher is better)
+    df['better_eFG'] = 1  # Team 1 by default
+    df.loc[df['team2_eFG_percentage'] > df['team1_eFG_percentage'], 'better_eFG'] = 2
+    df.loc[df['team2_eFG_percentage'] == df['team1_eFG_percentage'], 'better_eFG'] = 0  # Tie
+    
+    # For TOV% (lower is better)
+    df['better_TOV'] = 1  # Team 1 by default
+    df.loc[df['team2_TOV_percentage'] < df['team1_TOV_percentage'], 'better_TOV'] = 2
+    df.loc[df['team2_TOV_percentage'] == df['team1_TOV_percentage'], 'better_TOV'] = 0  # Tie
+    
+    # For ORB% (higher is better)
+    df['better_ORB'] = 1  # Team 1 by default
+    df.loc[df['team2_ORB_percentage'] > df['team1_ORB_percentage'], 'better_ORB'] = 2
+    df.loc[df['team2_ORB_percentage'] == df['team1_ORB_percentage'], 'better_ORB'] = 0  # Tie
+    
+    # For FTR% (higher is better)
+    df['better_FTR'] = 1  # Team 1 by default
+    df.loc[df['team2_FTR_percentage'] > df['team1_FTR_percentage'], 'better_FTR'] = 2
+    df.loc[df['team2_FTR_percentage'] == df['team1_FTR_percentage'], 'better_FTR'] = 0  # Tie
+    
+    # ------------- ADDITIONAL STATS ANALYSIS -------------
+    
+    # For Assists (higher is better)
+    df['better_AST'] = 1  # Team 1 by default
+    df.loc[df['team2_assists'] > df['team1_assists'], 'better_AST'] = 2
+    df.loc[df['team2_assists'] == df['team1_assists'], 'better_AST'] = 0  # Tie
+    
+    # For Steals (higher is better)
+    df['better_STL'] = 1  # Team 1 by default
+    df.loc[df['team2_steals'] > df['team1_steals'], 'better_STL'] = 2
+    df.loc[df['team2_steals'] == df['team1_steals'], 'better_STL'] = 0  # Tie
+    
+    # For Blocks (higher is better)
+    df['better_BLK'] = 1  # Team 1 by default
+    df.loc[df['team2_blocks'] > df['team1_blocks'], 'better_BLK'] = 2
+    df.loc[df['team2_blocks'] == df['team1_blocks'], 'better_BLK'] = 0  # Tie
+    
+    # For Total Rebounds (higher is better)
+    df['better_REB'] = 1  # Team 1 by default
+    df.loc[df['team2_rebounds'] > df['team1_rebounds'], 'better_REB'] = 2
+    df.loc[df['team2_rebounds'] == df['team1_rebounds'], 'better_REB'] = 0  # Tie
+    
+    # For 3-Pointers Made (higher is better)
+    df['better_3PM'] = 1  # Team 1 by default
+    df.loc[df['team2_3PM'] > df['team1_3PM'], 'better_3PM'] = 2
+    df.loc[df['team2_3PM'] == df['team1_3PM'], 'better_3PM'] = 0  # Tie
+    
+    # For Field Goal Percentage (higher is better)
+    df['better_FG_PCT'] = 1  # Team 1 by default
+    df.loc[df['team2_FG_percentage'] > df['team1_FG_percentage'], 'better_FG_PCT'] = 2
+    df.loc[df['team2_FG_percentage'] == df['team1_FG_percentage'], 'better_FG_PCT'] = 0  # Tie
+    
+    # For 3-Point Percentage (higher is better)
+    df['better_3P_PCT'] = 1  # Team 1 by default
+    df.loc[df['team2_3P_percentage'] > df['team1_3P_percentage'], 'better_3P_PCT'] = 2
+    df.loc[df['team2_3P_percentage'] == df['team1_3P_percentage'], 'better_3P_PCT'] = 0  # Tie
+    
+    # For Free Throw Percentage (higher is better)
+    df['better_FT_PCT'] = 1  # Team 1 by default
+    df.loc[df['team2_FT_percentage'] > df['team1_FT_percentage'], 'better_FT_PCT'] = 2
+    df.loc[df['team2_FT_percentage'] == df['team1_FT_percentage'], 'better_FT_PCT'] = 0  # Tie
+    
+    # For Fouls (lower is better)
+    df['better_FOULS'] = 1  # Team 1 by default
+    df.loc[df['team2_fouls'] < df['team1_fouls'], 'better_FOULS'] = 2
+    df.loc[df['team2_fouls'] == df['team1_fouls'], 'better_FOULS'] = 0  # Tie
+    
+    # For Biggest Scoring Run (higher is better)
+    df['better_RUN'] = 1  # Team 1 by default
+    df.loc[df['team2_scoring_run'] > df['team1_scoring_run'], 'better_RUN'] = 2
+    df.loc[df['team2_scoring_run'] == df['team1_scoring_run'], 'better_RUN'] = 0  # Tie
+    
+    # For Points in Paint (higher is better)
+    df['better_PAINT'] = 1  # Team 1 by default
+    df.loc[df['team2_points_in_paint'] > df['team1_points_in_paint'], 'better_PAINT'] = 2
+    df.loc[df['team2_points_in_paint'] == df['team1_points_in_paint'], 'better_PAINT'] = 0  # Tie
+    
+    # For Points off Turnovers (higher is better)
+    df['better_PTS_OFF_TO'] = 1  # Team 1 by default
+    df.loc[df['team2_points_off_TO'] > df['team1_points_off_TO'], 'better_PTS_OFF_TO'] = 2
+    df.loc[df['team2_points_off_TO'] == df['team1_points_off_TO'], 'better_PTS_OFF_TO'] = 0  # Tie
+    
+    # For Fast Break Points (higher is better)
+    df['better_FAST_BRK'] = 1  # Team 1 by default
+    df.loc[df['team2_fast_break'] > df['team1_fast_break'], 'better_FAST_BRK'] = 2
+    df.loc[df['team2_fast_break'] == df['team1_fast_break'], 'better_FAST_BRK'] = 0  # Tie
+    
+    # Calculate number of advantages for each team in four factors
+    four_factor_columns = ['better_eFG', 'better_TOV', 'better_ORB', 'better_FTR']
+    
+    # Count four factors advantages for team1
+    df['team1_ff_advantages'] = sum((df[col] == 1) for col in four_factor_columns)
+    
+    # Count four factors advantages for team2
+    df['team2_ff_advantages'] = sum((df[col] == 2) for col in four_factor_columns)
+    
+    # Calculate win rate when a team has better stats in each factor
+    results = {}
+    
+    # Total games
+    total_games = len(df)
+    
+    # Process four factors
+    factor_results = {}
+    
+    for factor, factor_name in zip(
+        four_factor_columns,
+        ['Effective FG%', 'Turnover Rate', 'Offensive Rebounding', 'Free Throw Rate']
+    ):
+        # Games where team1 was better in this factor
+        team1_better = df[df[factor] == 1]
+        team1_won_count = sum(team1_better['winner'] == 1)
+        team1_better_count = len(team1_better)
+        
+        # Games where team2 was better in this factor
+        team2_better = df[df[factor] == 2]
+        team2_won_count = sum(team2_better['winner'] == 2)
+        team2_better_count = len(team2_better)
+        
+        # Win percentages
+        team1_win_pct = team1_won_count / team1_better_count if team1_better_count > 0 else 0
+        team2_win_pct = team2_won_count / team2_better_count if team2_better_count > 0 else 0
+        
+        # Combined win percentage for teams with advantage in this factor
+        combined_wins = team1_won_count + team2_won_count
+        combined_games = team1_better_count + team2_better_count
+        combined_win_pct = combined_wins / combined_games if combined_games > 0 else 0
+        
+        factor_results[factor_name] = {
+            'win_percentage': combined_win_pct * 100,
+            'games_with_advantage': combined_games,
+            'wins_with_advantage': combined_wins
+        }
+    
+    # Calculate win rates based on how many four factors a team had advantage in
+    advantage_counts = {}
+    
+    for i in range(5):  # 0-4 advantages
+        # Games where team1 had exactly i advantages
+        team1_with_i = df[df['team1_ff_advantages'] == i]
+        team1_wins_with_i = sum(team1_with_i['winner'] == 1)
+        
+        # Games where team2 had exactly i advantages
+        team2_with_i = df[df['team2_ff_advantages'] == i]
+        team2_wins_with_i = sum(team2_with_i['winner'] == 2)
+        
+        # Combined stats
+        total_games_with_i = len(team1_with_i) + len(team2_with_i)
+        total_wins_with_i = team1_wins_with_i + team2_wins_with_i
+        win_pct_with_i = total_wins_with_i / total_games_with_i if total_games_with_i > 0 else 0
+        
+        advantage_counts[i] = {
+            'games': total_games_with_i,
+            'wins': total_wins_with_i,
+            'win_percentage': win_pct_with_i * 100
+        }
+    
+    # Process additional stats
+    additional_stat_columns = [
+        'better_AST', 'better_STL', 'better_BLK', 'better_REB',
+        'better_3PM', 'better_FG_PCT', 'better_3P_PCT', 'better_FT_PCT',
+        'better_FOULS', 'better_RUN', 'better_PAINT', 'better_PTS_OFF_TO', 
+        'better_FAST_BRK'
+    ]
+    
+    additional_stat_names = [
+        'Assists', 'Steals', 'Blocks', 'Total Rebounds',
+        '3-Pointers Made', 'FG Percentage', '3P Percentage', 'FT Percentage',
+        'Fewer Fouls', 'Biggest Scoring Run', 'Points in Paint', 'Points Off Turnovers',
+        'Fast Break Points'
+    ]
+    
+    additional_results = {}
+    
+    for factor, factor_name in zip(additional_stat_columns, additional_stat_names):
+        # Games where team1 was better in this stat
+        team1_better = df[df[factor] == 1]
+        team1_won_count = sum(team1_better['winner'] == 1)
+        team1_better_count = len(team1_better)
+        
+        # Games where team2 was better in this stat
+        team2_better = df[df[factor] == 2]
+        team2_won_count = sum(team2_better['winner'] == 2)
+        team2_better_count = len(team2_better)
+        
+        # Win percentages
+        team1_win_pct = team1_won_count / team1_better_count if team1_better_count > 0 else 0
+        team2_win_pct = team2_won_count / team2_better_count if team2_better_count > 0 else 0
+        
+        # Combined win percentage for teams with advantage in this stat
+        combined_wins = team1_won_count + team2_won_count
+        combined_games = team1_better_count + team2_better_count
+        combined_win_pct = combined_wins / combined_games if combined_games > 0 else 0
+        
+        additional_results[factor_name] = {
+            'win_percentage': combined_win_pct * 100,
+            'games_with_advantage': combined_games,
+            'wins_with_advantage': combined_wins
+        }
+    
+    return {
+        'factor_results': factor_results,
+        'advantage_counts': advantage_counts,
+        'additional_results': additional_results,
+        'raw_data': df
+    }
+
+def display_basketball_stats_win_analysis():
+    st.title("🏀 Basketball Stats Win Analysis")
+    
+    # Add timestamp
+    st.markdown(f"*Analysis generated on: 2025-03-28 20:41:03*")
+    st.markdown(f"*Generated by: Dodga010nice*")
+    
+    # Run the analysis
+    analysis_results = analyze_basketball_stats_wins()
+    
+    if not analysis_results:
+        st.error("No data available for analysis.")
+        return
+    
+    df = analysis_results['raw_data']
+    factor_results = analysis_results['factor_results']
+    advantage_counts = analysis_results['advantage_counts']
+    additional_results = analysis_results['additional_results']
+    
+    # Display summary of games analyzed
+    st.write(f"### Analysis based on {len(df)} games")
+    
+    # Create tabs for different types of analysis
+    tab1, tab2, tab3 = st.tabs(["Four Factors", "Additional Stats", "Combined Analysis"])
+    
+    with tab1:
+        st.write("## Four Factors Analysis")
+        
+        # Display win percentage for each factor
+        st.write("### Win Percentage When Having Advantage in Each Factor")
+        
+        # Create DataFrame for factor results
+        factor_df = pd.DataFrame({
+            'Factor': list(factor_results.keys()),
+            'Win %': [factor_results[factor]['win_percentage'] for factor in factor_results],
+            'Games': [factor_results[factor]['games_with_advantage'] for factor in factor_results],
+            'Wins': [factor_results[factor]['wins_with_advantage'] for factor in factor_results]
+        })
+        
+        # Sort by win percentage
+        factor_df = factor_df.sort_values('Win %', ascending=False).reset_index(drop=True)
+        
+        # Display as table
+        st.dataframe(
+            factor_df.style.format({
+                'Win %': '{:.1f}%',
+                'Games': '{:.0f}',
+                'Wins': '{:.0f}'
+            })
+        )
+        
+        # Create bar chart for factor win percentages
+        fig, ax = plt.subplots(figsize=(10, 6))
+        sns.barplot(
+            x='Factor', 
+            y='Win %', 
+            data=factor_df,
+            palette='viridis',
+            ax=ax
+        )
+        
+        # Add data labels
+        for i, row in factor_df.iterrows():
+            ax.text(
+                i, 
+                row['Win %'] + 1, 
+                f"{row['Win %']:.1f}%", 
+                ha='center',
+                fontweight='bold'
+            )
+        
+        ax.set_xlabel("Four Factors")
+        ax.set_ylabel("Win Percentage")
+        ax.set_title("Win Percentage When Having Advantage in Each Factor")
+        plt.xticks(rotation=0)
+        
+        st.pyplot(fig)
+        
+        # Display win percentage by number of advantages
+        st.write("### Win Percentage by Number of Four Factor Advantages")
+        
+        # Create DataFrame for advantage counts
+        advantage_df = pd.DataFrame({
+            'Advantages': list(advantage_counts.keys()),
+            'Win %': [advantage_counts[i]['win_percentage'] for i in range(5)],
+            'Games': [advantage_counts[i]['games'] for i in range(5)],
+            'Wins': [advantage_counts[i]['wins'] for i in range(5)],
+        })
+        
+        # Display as table
+        st.dataframe(
+            advantage_df.style.format({
+                'Win %': '{:.1f}%',
+                'Games': '{:.0f}',
+                'Wins': '{:.0f}'
+            })
+        )
+        
+        # Create line chart for advantage win percentages
+        fig, ax = plt.subplots(figsize=(10, 6))
+        sns.lineplot(
+            x='Advantages', 
+            y='Win %', 
+            data=advantage_df,
+            marker='o',
+            linewidth=2,
+            markersize=10,
+            color='blue',
+            ax=ax
+        )
+        
+        # Add data labels
+        for i, row in advantage_df.iterrows():
+            ax.text(
+                row['Advantages'], 
+                row['Win %'] + 1, 
+                f"{row['Win %']:.1f}%", 
+                ha='center',
+                fontweight='bold'
+            )
+        
+        ax.set_xlabel("Number of Four Factor Advantages")
+        ax.set_ylabel("Win Percentage")
+        ax.set_title("Win Percentage by Number of Four Factor Advantages")
+        ax.set_xticks(range(5))
+        ax.set_xlim(-0.5, 4.5)
+        ax.grid(True, alpha=0.3)
+        
+        st.pyplot(fig)
+        
+        # Show details of what the four factors are
+        with st.expander("What are the Four Factors?", expanded=False):
+            st.write("""
+            The "Four Factors" of basketball success were identified by Dean Oliver as the key statistics that determine the outcome of basketball games:
+            
+            1. **Effective Field Goal Percentage (eFG%)**: Accounts for the fact that 3-point field goals are worth 50% more than 2-point field goals.
+               - Formula: (FG + 0.5 * 3P) / FGA
+               - Higher is better
+            
+            2. **Turnover Rate (TOV%)**: The percentage of possessions that end in a turnover.
+               - Formula: TO / (FGA + 0.44 * FTA + TO)
+               - Lower is better
+            
+            3. **Offensive Rebounding Percentage (ORB%)**: The percentage of available offensive rebounds a team gets.
+               - Formula: ORB / (ORB + Opponent DRB)
+               - Higher is better
+            
+            4. **Free Throw Rate (FTR)**: How often a team gets to the free throw line relative to field goal attempts.
+               - Formula: FTA / FGA
+               - Higher is better
+            """)
+    
+    with tab2:
+        st.write("## Additional Stats Analysis")
+        
+        # Display win percentage for each additional stat
+        st.write("### Win Percentage When Having Advantage in Each Statistic")
+        
+        # Create DataFrame for additional stat results
+        add_stat_df = pd.DataFrame({
+            'Statistic': list(additional_results.keys()),
+            'Win %': [additional_results[stat]['win_percentage'] for stat in additional_results],
+            'Games': [additional_results[stat]['games_with_advantage'] for stat in additional_results],
+            'Wins': [additional_results[stat]['wins_with_advantage'] for stat in additional_results]
+        })
+        
+        # Sort by win percentage
+        add_stat_df = add_stat_df.sort_values('Win %', ascending=False).reset_index(drop=True)
+        
+        # Display as table
+        st.dataframe(
+            add_stat_df.style.format({
+                'Win %': '{:.1f}%',
+                'Games': '{:.0f}',
+                'Wins': '{:.0f}'
+            })
+        )
+        
+        # Create bar chart for additional stats win percentages
+        fig, ax = plt.subplots(figsize=(12, 8))
+        colors = sns.color_palette("coolwarm", len(add_stat_df))
+        bars = sns.barplot(
+            x='Statistic', 
+            y='Win %', 
+            data=add_stat_df,
+            palette=colors,
+            ax=ax
+        )
+        
+        # Add data labels
+        for i, row in add_stat_df.iterrows():
+            ax.text(
+                i, 
+                row['Win %'] + 0.5, 
+                f"{row['Win %']:.1f}%", 
+                ha='center',
+                fontweight='bold',
+                fontsize=9
+            )
+        
+        ax.set_xlabel("Statistics")
+        ax.set_ylabel("Win Percentage")
+        ax.set_title("Win Percentage When Having Advantage in Each Statistic")
+        plt.xticks(rotation=45, ha='right')
+        plt.tight_layout()
+        
+        st.pyplot(fig)
+        
+        # Create a heatmap showing the correlation between different stats and winning
+        st.write("### Correlation Between Stats and Winning")
+        
+        # Create a correlation matrix between having advantage in each stat and winning
+        all_columns = ['winner'] + ['better_' + col for col in ['eFG', 'TOV', 'ORB', 'FTR', 'AST', 'STL', 'BLK', 'REB', '3PM', 'FG_PCT', '3P_PCT', 'FT_PCT', 'FOULS', 'RUN', 'PAINT', 'PTS_OFF_TO', 'FAST_BRK']]
+        
+        # Create binary columns for team1 winning and having advantage in each stat
+        binary_df = pd.DataFrame()
+        binary_df['won_game'] = (df['winner'] == 1).astype(int)
+        
+        for col in all_columns[1:]:
+            binary_df[col] = (df[col] == 1).astype(int)
+        
+        # Calculate correlation
+        corr_matrix = binary_df.corr()
+        
+        # Display heatmap
+        fig, ax = plt.subplots(figsize=(12, 10))
+        mask = np.triu(np.ones_like(corr_matrix, dtype=bool))
+        heatmap = sns.heatmap(
+            corr_matrix, 
+            mask=mask,
+            annot=True, 
+            cmap='coolwarm', 
+            fmt='.2f',
+            linewidths=0.5,
+            vmin=-1, 
+            vmax=1,
+            center=0,
+            square=True,
+            ax=ax
+        )
+        
+        plt.title('Correlation Between Stats and Winning')
+        plt.tight_layout()
+        
+        st.pyplot(fig)
+    
+    with tab3:
+        st.write("## Combined Analysis")
+        
+        # Combine four factors and additional stats
+        all_stats_results = {**factor_results, **additional_results}
+        
+        # Create DataFrame for all stats results
+        all_stats_df = pd.DataFrame({
+            'Statistic': list(all_stats_results.keys()),
+            'Win %': [all_stats_results[stat]['win_percentage'] for stat in all_stats_results],
+            'Games': [all_stats_results[stat]['games_with_advantage'] for stat in all_stats_results],
+            'Wins': [all_stats_results[stat]['wins_with_advantage'] for stat in all_stats_results]
+        })
+        
+        # Sort by win percentage
+        all_stats_df = all_stats_df.sort_values('Win %', ascending=False).reset_index(drop=True)
+        
+        # Add a column to identify if it's a four factor
+        all_stats_df['Category'] = 'Other Stat'
+        all_stats_df.loc[all_stats_df['Statistic'].isin(factor_results.keys()), 'Category'] = 'Four Factor'
+        
+        # Display as table
+        st.write("### All Stats Ranked by Win Percentage")
+        st.dataframe(
+            all_stats_df.style.format({
+                'Win %': '{:.1f}%',
+                'Games': '{:.0f}',
+                'Wins': '{:.0f}'
+            })
+        )
+        
+        # Create bar chart for all stats win percentages
+        fig, ax = plt.subplots(figsize=(14, 8))
+        bars = sns.barplot(
+            x='Statistic', 
+            y='Win %', 
+            data=all_stats_df,
+            hue='Category',
+            palette={'Four Factor': '#3366cc', 'Other Stat': '#ff9900'},
+            ax=ax
+        )
+        
+        # Add data labels
+        for i, row in all_stats_df.iterrows():
+            ax.text(
+                i, 
+                row['Win %'] + 0.5, 
+                f"{row['Win %']:.1f}%", 
+                ha='center',
+                fontweight='bold',
+                fontsize=9,
+                rotation=0
+            )
+        
+        ax.set_xlabel("Statistics")
+        ax.set_ylabel("Win Percentage")
+        ax.set_title("All Stats Ranked by Win Percentage")
+        plt.xticks(rotation=45, ha='right')
+        plt.legend(title='Category')
+        plt.tight_layout()
+        
+        st.pyplot(fig)
+        
+        # Display top 5 most important stats for winning
+        st.write("### Top 5 Most Important Stats for Winning")
+        top_stats = all_stats_df.head(5)
+        
+        col1, col2, col3, col4, col5 = st.columns(5)
+        cols = [col1, col2, col3, col4, col5]
+        
+        for i, (_, row) in enumerate(top_stats.iterrows()):
+            with cols[i]:
+                st.metric(
+                    f"#{i+1}: {row['Statistic']}", 
+                    f"{row['Win %']:.1f}%",
+                    f"{row['Category']}"
+                )
+        
+        # Example game analysis section
+        st.write("### Example: Analyzing a Game with all Stats")
+        
+        # Pick a recent game randomly
+        sample_game = df.sample(1).iloc[0]
+        team1_name = sample_game['team1_name']
+        team2_name = sample_game['team2_name']
+        team1_score = int(sample_game['team1_score'])
+        team2_score = int(sample_game['team2_score'])
+        winner = team1_name if sample_game['winner'] == 1 else team2_name
+        
+        st.write(f"#### {team1_name} ({team1_score}) vs {team2_name} ({team2_score})")
+        st.write(f"Winner: **{winner}**")
+        
+        # Create DataFrames to compare stats side by side
+        four_factors_comparison = pd.DataFrame({
+            'Four Factors': ['Effective FG%', 'Turnover Rate', 'Offensive Rebounding', 'Free Throw Rate'],
+            team1_name: [
+                f"{sample_game['team1_eFG_percentage']:.1f}%",
+                f"{sample_game['team1_TOV_percentage']:.1f}%",
+                f"{sample_game['team1_ORB_percentage']:.1f}%",
+                f"{sample_game['team1_FTR_percentage']:.1f}%"
+            ],
+            team2_name: [
+                f"{sample_game['team2_eFG_percentage']:.1f}%",
+                f"{sample_game['team2_TOV_percentage']:.1f}%",
+                f"{sample_game['team2_ORB_percentage']:.1f}%",
+                f"{sample_game['team2_FTR_percentage']:.1f}%"
+            ],
+            'Advantage': [
+                team1_name if sample_game['better_eFG'] == 1 else team2_name,
+                team1_name if sample_game['better_TOV'] == 1 else team2_name,
+                team1_name if sample_game['better_ORB'] == 1 else team2_name,
+                team1_name if sample_game['better_FTR'] == 1 else team2_name
+            ]
+        })
+        
+        # Display the four factors comparison
+        st.write("##### Four Factors Comparison")
+        st.dataframe(four_factors_comparison)
+        
+
 def main():
     st.title("🏀 Basketball Stats Viewer")
     page = st.sidebar.selectbox("📌 Choose a page", ["Team Season Boxscore", "Shot Chart","Match report", "Four Factors", "Lebron", "Play by Play", "Match Detail", "Five Player Segments", "Team Lineup Analysis"])
@@ -4380,7 +5041,8 @@ def main():
                 st.warning(f"No match data available for {team1}.")
 
         display_four_factors_analysis()
-
+        display_basketball_stats_win_analysis()
+        
     elif page == "Match report":
         display_match_report()
 

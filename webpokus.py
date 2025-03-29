@@ -7195,18 +7195,18 @@ def display_team_rating_analysis():
         """)
     
     with col2:
-	st.markdown("""
-        **Top Right**: Teams with good offense and good defense.
-        - The league's elite teams.
-        - Positive net rating, championship contenders.
-        - Well-balanced teams that excel on both ends.
-        """)
-	    
         st.markdown("""
         **Bottom Right**: Teams with good offense but bad defense.
         - High scoring teams that struggle to get stops.
         - Typically exciting to watch but inconsistent.
         - Often involved in high-scoring games.
+        """)
+        
+        st.markdown("""
+        **Top Right**: Teams with good offense and good defense.
+        - The league's elite teams.
+        - Positive net rating, championship contenders.
+        - Well-balanced teams that excel on both ends.
         """)
     
     # Display team rankings table
@@ -7249,7 +7249,7 @@ def display_team_rating_analysis():
     df['balance_score'] = abs(df['offensive_rating'] - df['offensive_rating'].mean()) + abs(df['defensive_rating'] - df['defensive_rating'].mean())
     most_balanced = df.loc[df['balance_score'].idxmin()]
     st.write(f"⚖️ **Most Balanced Team**: {most_balanced['team_name']} (closest to league average in both offense and defense)")
-    
+	
 def main():
     st.title("🏀 Basketball Stats Viewer")
     page = st.sidebar.selectbox("📌 Choose a page", ["Team Season Boxscore", "Shot Chart","Match report", "Four Factors", "Lebron", "Play by Play", "Match Detail", "Five Player Segments", "Team Lineup Analysis"])

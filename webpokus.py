@@ -7073,9 +7073,10 @@ def analyze_team_o_d_ratings():
     ax.axvline(x=league_avg_ortg, color='gray', linestyle='--', alpha=0.7)
     ax.axhline(y=league_avg_drtg, color='gray', linestyle='--', alpha=0.7)
     
-    # Label the quadrants
+    # Label the quadrants - CORRECTED POSITIONING
+    # Remember: For defensive rating, LOWER is BETTER (fewer points allowed)
     ax.text(
-        df['offensive_rating'].min() + 2, 
+        df['offensive_rating'].max() - 15, 
         df['defensive_rating'].min() + 2, 
         "Good Offense\nGood Defense",
         fontsize=12,
@@ -7084,7 +7085,7 @@ def analyze_team_o_d_ratings():
     )
     ax.text(
         df['offensive_rating'].max() - 15, 
-        df['defensive_rating'].min() + 2, 
+        df['defensive_rating'].max() - 5, 
         "Good Offense\nBad Defense",
         fontsize=12,
         weight='bold',
@@ -7099,8 +7100,8 @@ def analyze_team_o_d_ratings():
         color='red'
     )
     ax.text(
-        df['offensive_rating'].max() - 15, 
-        df['defensive_rating'].max() - 5, 
+        df['offensive_rating'].min() + 2, 
+        df['defensive_rating'].min() + 2, 
         "Bad Offense\nGood Defense",
         fontsize=12,
         weight='bold',
@@ -7173,20 +7174,20 @@ def display_team_rating_analysis():
     # Display the chart
     st.pyplot(fig)
     
-    # Explanation of quadrants
+    # Explanation of quadrants - CORRECTED DESCRIPTIONS
     st.subheader("Understanding the Quadrants")
     
     col1, col2 = st.columns(2)
     
     with col1:
         st.markdown("""
-        **Top Left**: Teams with good defense but below-average offense.
+        **Bottom Left**: Teams with good defense but below-average offense.
         - Typically strong defensive teams that struggle to score.
         - Win games through defensive effort.
         """)
         
         st.markdown("""
-        **Bottom Left**: Teams with poor offense and poor defense.
+        **Top Left**: Teams with poor offense and poor defense.
         - Typically rebuilding or struggling teams.
         - Negative net rating.
         """)
@@ -7425,7 +7426,7 @@ def main():
 
             display_avg_substitutions_graph()
             display_team_rating_analysis()
-            
+
     elif page == "Head-to-Head Comparison":
         df = fetch_team_data()
         if df.empty:

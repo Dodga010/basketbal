@@ -7195,18 +7195,18 @@ def display_team_rating_analysis():
         """)
     
     with col2:
+	st.markdown("""
+        **Top Right**: Teams with good offense and good defense.
+        - The league's elite teams.
+        - Positive net rating, championship contenders.
+        - Well-balanced teams that excel on both ends.
+        """)
+	    
         st.markdown("""
         **Bottom Right**: Teams with good offense but bad defense.
         - High scoring teams that struggle to get stops.
         - Typically exciting to watch but inconsistent.
         - Often involved in high-scoring games.
-        """)
-        
-        st.markdown("""
-        **Top Right**: Teams with good offense and good defense.
-        - The league's elite teams.
-        - Positive net rating, championship contenders.
-        - Well-balanced teams that excel on both ends.
         """)
     
     # Display team rankings table

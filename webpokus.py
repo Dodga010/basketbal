@@ -6757,7 +6757,493 @@ def fetch_teams():
     conn.close()
     return teams
 
+def improve_shot_zone_analysis(shots_df):
+    """
+    Improved shot zone analysis that:
+    1. Normalizes shots to one basket (by inverting coordinates)
+    2. Verifies shot type classification
+    3. Properly handles corner 3s from both ends of court
+    
+    Parameters:
+    -----------
+    shots_df : pandas DataFrame
+        DataFrame containing shot data with columns:
+        x_coord, y_coord, action_type, period, etc.
+    
+    Returns:
+    --------
+    shots_df : pandas DataFrame
+        DataFrame with improved shot zone classifications
+    """
+    # Step 1: Normalize all shots to one basket
+    # Shots with x_coord > 50 are taken on the other half of the court
+    shots_df['normalized_x'] = shots_df['x_coord'].apply(lambda x: 100 - x if x > 50 else x)
+    shots_df['normalized_y'] = shots_df['y_coord'].copy()
+    
+    # Step 2: Scale coordinates for the court image
+    shots_df['court_x'] = shots_df['normalized_x'] * 2.8
+    shots_df['court_y'] = shots_df['normalized_y'] * 2.61
+    
+    # Define basket position (normalized to left side)
+    basket_x = 6.2 * 2.8  # = 17.36
+    basket_y = 50 * 2.61  # = 130.5
+    
+    # Step 3: Calculate distance from basket using normalized coordinates
+    shots_df['distance_from_basket'] = np.sqrt(
+        (shots_df['court_x'] - basket_x)**2 + 
+        (shots_df['court_y'] - basket_y)**2
+    )
+    
+    # Step 4: Determine if shot is a 3-pointer based on distance
+    # NBA 3-point line is approximately 23.75 feet, converted to our coordinate system
+    shots_df['is_three_by_position'] = shots_df['distance_from_basket'] > 67
+    
+    # Step 5: Compare with recorded shot type for verification
+    shots_df['recorded_is_three'] = shots_df['action_type'] == '3pt'
+    shots_df['type_mismatch'] = shots_df['is_three_by_position'] != shots_df['recorded_is_three']
+    
+    # Count and log misclassifications
+    misclassified_count = shots_df['type_mismatch'].sum()
+    if misclassified_count > 0:
+        print(f"Warning: {misclassified_count} shots have mismatched type classification")
+        
+    # Step 6: Enhanced zone definitions with better corner detection
+    # Create a function to classify shots into zones
+    def classify_zone(row):
+        dist = row['distance_from_basket']
+        x = row['court_x']
+        y = row['court_y']
+        is_three = row['is_three_by_position']
+        
+        # Record original side of court (left/right) before normalization
+        original_side = 'right' if row['x_coord'] > 50 else 'left'
+        
+        # Restricted area (right at the basket)
+        if dist < 12:
+            return 'Restricted Area'
+            
+        # Paint area (not at rim but in the key)
+        elif y <= 19 * 2.61 and dist >= 12:
+            return 'Paint (Non-Rim)'
+            
+        # Mid-range (outside paint but inside 3pt line)
+        elif not is_three:
+            return 'Mid-Range'
+            
+        # Corner 3s - using normalized coordinates but preserving original side info
+        # Corner three criteria: Shot beyond 3pt line AND near sideline (low y-value)
+        elif is_three and x < 10 * 2.8:  # Left corner on normalized court
+            corner_side = 'Right' if original_side == 'right' else 'Left'
+            return f'{corner_side} Corner 3'
+            
+        elif is_three and x > 40 * 2.8:  # Right corner on normalized court
+            corner_side = 'Left' if original_side == 'right' else 'Right'
+            return f'{corner_side} Corner 3'
+            
+        # Above the break 3s (all other 3pt shots)
+        elif is_three:
+            return 'Above Break 3'
+            
+        # Fallback
+        else:
+            return 'Other'
+    
+    # Apply zone classification
+    shots_df['zone'] = shots_df.apply(classify_zone, axis=1)
+    
+    # Step 7: Calculate shot efficiency by zone
+    zone_stats = shots_df.groupby('zone').agg(
+        total_shots=pd.NamedAgg(column='action_type', aggfunc='count'),
+        made_shots=pd.NamedAgg(column='shot_result', aggfunc='sum'),
+        points=pd.NamedAgg(column='points', aggfunc='sum')
+    ).reset_index()
+    
+    # Calculate percentages and points per shot
+    zone_stats['fg_percentage'] = round(zone_stats['made_shots'] / zone_stats['total_shots'] * 100, 1)
+    zone_stats['pps'] = round(zone_stats['points'] / zone_stats['total_shots'], 2)
+    zone_stats['distribution'] = round(zone_stats['total_shots'] / len(shots_df) * 100, 1)
+    
+    # Step 8: Identify hot and cold zones
+    avg_fg = shots_df['shot_result'].mean() * 100
+    zone_stats['hot_zone'] = zone_stats['fg_percentage'] > (avg_fg + 5)
+    zone_stats['cold_zone'] = zone_stats['fg_percentage'] < (avg_fg - 5)
+    
+    return shots_df, zone_stats
 
+def generate_improved_shot_chart(player_name=None, team_name=None):
+    """
+    Generate improved shot chart visualization for a player or team
+    
+    Parameters:
+    -----------
+    player_name : str, optional
+        Name of the player to analyze
+    team_name : str, optional
+        Name of the team to analyze
+    """
+    # Verify that we have either player_name or team_name, but not both
+    if not player_name and not team_name:
+        raise ValueError("Must provide either player_name or team_name")
+    if player_name and team_name:
+        raise ValueError("Cannot provide both player_name and team_name")
+    
+    # Connect to database
+    conn = sqlite3.connect(db_path)
+    
+    # Construct query based on whether we're analyzing a player or team
+    if player_name:
+        query = """
+        SELECT 
+            s.game_id,
+            s.team_id,
+            s.player_name,
+            s.period,
+            s.action_type,
+            s.shot_result,
+            s.x_coord,
+            s.y_coord
+        FROM Shots s
+        WHERE s.player_name = ?;
+        """
+        params = (player_name,)
+        title_entity = player_name
+    else:  # team_name
+        query = """
+        SELECT 
+            s.game_id,
+            s.team_id,
+            s.player_name,
+            s.period,
+            s.action_type,
+            s.shot_result,
+            s.x_coord,
+            s.y_coord,
+            t.tm, 
+            t.name
+        FROM Shots s
+        JOIN Teams t ON s.game_id = t.game_id AND s.team_id = t.tm
+        WHERE t.name = ?;
+        """
+        params = (team_name,)
+        title_entity = team_name
+    
+    # Execute query
+    shots_df = pd.read_sql_query(query, conn, params=params)
+    
+    # Close connection
+    conn.close()
+    
+    if shots_df.empty:
+        print(f"No shot data found for {title_entity}.")
+        return None, None
+    
+    # Calculate points for each shot
+    shots_df['points'] = 0
+    shots_df.loc[(shots_df['action_type'] == '2pt') & (shots_df['shot_result'] == 1), 'points'] = 2
+    shots_df.loc[(shots_df['action_type'] == '3pt') & (shots_df['shot_result'] == 1), 'points'] = 3
+    
+    # Apply improved shot zone analysis
+    processed_shots, zone_stats = improve_shot_zone_analysis(shots_df)
+    
+    # Create shot chart visualization
+    fig, ax = plt.subplots(figsize=(12, 11))
+    
+    # Check if the court image exists
+    if os.path.exists("fiba_courtonly.jpg"):
+        # Load court image
+        court_img = mpimg.imread("fiba_courtonly.jpg")
+        ax.imshow(court_img, extent=[0, 280, 0, 261], aspect="auto")
+        
+        # Plot shots
+        made = processed_shots[processed_shots['shot_result'] == 1]
+        missed = processed_shots[processed_shots['shot_result'] == 0]
+        
+        ax.scatter(made['court_x'], made['court_y'], 
+                  c='green', s=50, alpha=0.7, marker='o', label='Made')
+        ax.scatter(missed['court_x'], missed['court_y'], 
+                  c='red', s=50, alpha=0.7, marker='x', label='Missed')
+        
+        # Add a shot density heatmap
+        if len(processed_shots) > 10:  # Only add heatmap if we have enough shots
+            sns.kdeplot(x=processed_shots['court_x'], y=processed_shots['court_y'], 
+                      fill=True, alpha=0.3, levels=10, 
+                      cmap='YlOrRd', ax=ax)
+        
+        # Remove axes
+        ax.set_xticks([])
+        ax.set_yticks([])
+        
+        # Add title and legend
+        ax.set_title(f"{title_entity} Shot Chart with Improved Zone Analysis", fontsize=16)
+        ax.legend(loc='upper left')
+        
+        # Add text showing the misclassification rate
+        misclassified_count = processed_shots['type_mismatch'].sum()
+        total_shots = len(processed_shots)
+        if total_shots > 0:
+            misclass_rate = misclassified_count / total_shots * 100
+            ax.text(10, 10, f"Shot type misclassification rate: {misclass_rate:.1f}%", 
+                   fontsize=10, color='black', bbox=dict(facecolor='white', alpha=0.7))
+    
+    # Return processed data and figure for further analysis
+    return processed_shots, zone_stats, fig
+
+def analyze_team_o_d_ratings():
+    """
+    Calculate offensive and defensive ratings for all teams and display them on a scatter plot.
+    
+    This function:
+    1. Retrieves team data from the database
+    2. Calculates offensive and defensive ratings for each team
+    3. Creates a quadrant visualization showing team performance
+    4. Returns the visualization as a figure
+    """
+    # Connect to database
+    conn = sqlite3.connect(db_path)
+    
+    # Query to get team data needed for calculation
+    query = """
+    WITH team_games AS (
+        SELECT 
+            t1.game_id,
+            t1.name AS team_name,
+            t1.p1_score + t1.p2_score + t1.p3_score + t1.p4_score AS team_score,
+            t1.field_goals_attempted AS team_fga,
+            t1.turnovers AS team_to,
+            t1.free_throws_attempted AS team_fta,
+            t1.rebounds_offensive AS team_orb,
+            
+            t2.p1_score + t2.p2_score + t2.p3_score + t2.p4_score AS opp_score,
+            t2.field_goals_attempted AS opp_fga,
+            t2.turnovers AS opp_to,
+            t2.free_throws_attempted AS opp_fta,
+            t2.rebounds_offensive AS opp_orb
+        FROM Teams t1
+        JOIN Teams t2 ON t1.game_id = t2.game_id AND t1.tm != t2.tm
+    )
+    SELECT 
+        team_name,
+        AVG(team_score) AS avg_pts_scored,
+        AVG(opp_score) AS avg_pts_allowed,
+        AVG(team_fga + 0.44 * team_fta - team_orb + team_to) AS avg_poss_used,
+        AVG(opp_fga + 0.44 * opp_fta - opp_orb + opp_to) AS avg_poss_allowed
+    FROM team_games
+    GROUP BY team_name
+    """
+    
+    df = pd.read_sql_query(query, conn)
+    conn.close()
+    
+    if df.empty:
+        return None
+    
+    # Calculate offensive and defensive ratings (points per 100 possessions)
+    df['offensive_rating'] = 100 * df['avg_pts_scored'] / df['avg_poss_used']
+    df['defensive_rating'] = 100 * df['avg_pts_allowed'] / df['avg_poss_allowed']
+    
+    # Calculate net rating
+    df['net_rating'] = df['offensive_rating'] - df['defensive_rating']
+    
+    # Sort by net rating
+    df = df.sort_values('net_rating', ascending=False)
+    
+    # Calculate league averages
+    league_avg_ortg = df['offensive_rating'].mean()
+    league_avg_drtg = df['defensive_rating'].mean()
+    
+    # Create figure
+    fig, ax = plt.subplots(figsize=(12, 10))
+    
+    # Create a colormap based on net rating
+    norm = plt.Normalize(df['net_rating'].min(), df['net_rating'].max())
+    colors = plt.cm.RdYlGn(norm(df['net_rating']))
+    
+    # Create scatter plot
+    scatter = ax.scatter(
+        df['offensive_rating'], 
+        df['defensive_rating'],
+        c=colors,
+        s=100,
+        alpha=0.8,
+        edgecolor='black',
+        linewidth=1
+    )
+    
+    # Add quadrant lines at league average
+    ax.axvline(x=league_avg_ortg, color='gray', linestyle='--', alpha=0.7)
+    ax.axhline(y=league_avg_drtg, color='gray', linestyle='--', alpha=0.7)
+    
+    # Label the quadrants
+    ax.text(
+        df['offensive_rating'].min() + 2, 
+        df['defensive_rating'].min() + 2, 
+        "Good Offense\nGood Defense",
+        fontsize=12,
+        weight='bold',
+        color='green'
+    )
+    ax.text(
+        df['offensive_rating'].max() - 15, 
+        df['defensive_rating'].min() + 2, 
+        "Good Offense\nBad Defense",
+        fontsize=12,
+        weight='bold',
+        color='orange'
+    )
+    ax.text(
+        df['offensive_rating'].min() + 2, 
+        df['defensive_rating'].max() - 5, 
+        "Bad Offense\nBad Defense",
+        fontsize=12,
+        weight='bold',
+        color='red'
+    )
+    ax.text(
+        df['offensive_rating'].max() - 15, 
+        df['defensive_rating'].max() - 5, 
+        "Bad Offense\nGood Defense",
+        fontsize=12,
+        weight='bold',
+        color='blue'
+    )
+    
+    # Invert y-axis for defensive rating (lower is better)
+    ax.invert_yaxis()
+    
+    # Add team labels to each point
+    for i, row in df.iterrows():
+        ax.annotate(
+            row['team_name'], 
+            (row['offensive_rating'], row['defensive_rating']),
+            xytext=(5, 0),
+            textcoords='offset points',
+            fontsize=9,
+            weight='bold'
+        )
+    
+    # Set labels and title
+    ax.set_xlabel('Offensive Rating (Points Scored per 100 Possessions)', fontsize=12)
+    ax.set_ylabel('Defensive Rating (Points Allowed per 100 Possessions)', fontsize=12)
+    ax.set_title('Team Performance: Offensive vs. Defensive Rating', fontsize=16)
+    
+    # Add a colorbar legend
+    cbar = plt.colorbar(plt.cm.ScalarMappable(norm=norm, cmap='RdYlGn'), ax=ax)
+    cbar.set_label('Net Rating', rotation=270, labelpad=15)
+    
+    # Add grid lines
+    ax.grid(True, linestyle='--', alpha=0.3)
+    
+    # Equal aspect ratio for visual clarity
+    ax.set_aspect('equal')
+    
+    # Add annotations for league averages
+    ax.text(
+        league_avg_ortg + 1, 
+        df['defensive_rating'].min() + 2,
+        f"League Avg: {league_avg_ortg:.1f}", 
+        rotation=90,
+        verticalalignment='bottom'
+    )
+    ax.text(
+        df['offensive_rating'].min() + 2, 
+        league_avg_drtg + 1,
+        f"League Avg: {league_avg_drtg:.1f}"
+    )
+    
+    return fig, df
+
+def display_team_rating_analysis():
+    """Display team offensive and defensive rating analysis in Streamlit"""
+    st.title("📊 Team Offensive vs. Defensive Rating Analysis")
+    
+    # Current date/time
+    st.markdown(f"*Analysis generated on: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}*")
+    st.markdown(f"*Generated by: Dodga010*")
+    
+    # Run the analysis
+    with st.spinner("Calculating team ratings..."):
+        result = analyze_team_o_d_ratings()
+        
+    if result is None:
+        st.error("No team data available.")
+        return
+        
+    fig, df = result
+    
+    # Display the chart
+    st.pyplot(fig)
+    
+    # Explanation of quadrants
+    st.subheader("Understanding the Quadrants")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("""
+        **Top Left**: Teams with good defense but below-average offense.
+        - Typically strong defensive teams that struggle to score.
+        - Win games through defensive effort.
+        """)
+        
+        st.markdown("""
+        **Bottom Left**: Teams with poor offense and poor defense.
+        - Typically rebuilding or struggling teams.
+        - Negative net rating.
+        """)
+    
+    with col2:
+        st.markdown("""
+        **Top Right**: Teams with good offense but below-average defense.
+        - High scoring teams that struggle to get stops.
+        - Typically exciting to watch but inconsistent.
+        """)
+        
+        st.markdown("""
+        **Bottom Right**: Teams with strong offense and strong defense.
+        - The league's elite teams.
+        - Positive net rating, championship contenders.
+        """)
+    
+    # Display team rankings table
+    st.subheader("Team Ratings")
+    
+    # Format the dataframe for display
+    display_df = df[['team_name', 'offensive_rating', 'defensive_rating', 'net_rating']].copy()
+    display_df.columns = ['Team', 'Offensive Rating', 'Defensive Rating', 'Net Rating']
+    display_df = display_df.sort_values('Net Rating', ascending=False).reset_index(drop=True)
+    
+    # Add ranking column
+    display_df.index = display_df.index + 1
+    display_df = display_df.rename_axis('Rank').reset_index()
+    
+    # Display with formatting
+    st.dataframe(
+        display_df.style.format({
+            'Offensive Rating': '{:.1f}',
+            'Defensive Rating': '{:.1f}',
+            'Net Rating': '{:.1f}'
+        }).background_gradient(subset=['Net Rating'], cmap='RdYlGn')
+    )
+    
+    # Add efficiency insights
+    st.subheader("Team Efficiency Insights")
+    
+    # Most efficient offensive team
+    best_offense = df.loc[df['offensive_rating'].idxmax()]
+    st.write(f"📈 **Best Offensive Team**: {best_offense['team_name']} ({best_offense['offensive_rating']:.1f} points per 100 possessions)")
+    
+    # Most efficient defensive team
+    best_defense = df.loc[df['defensive_rating'].idxmin()]
+    st.write(f"🛡️ **Best Defensive Team**: {best_defense['team_name']} ({best_defense['defensive_rating']:.1f} points allowed per 100 possessions)")
+    
+    # Best net rating
+    best_net = df.loc[df['net_rating'].idxmax()]
+    st.write(f"⭐ **Best Overall Team**: {best_net['team_name']} (Net Rating: {best_net['net_rating']:.1f})")
+    
+    # Most balanced team (closest to the origin in the normalized space)
+    df['balance_score'] = abs(df['offensive_rating'] - df['offensive_rating'].mean()) + abs(df['defensive_rating'] - df['defensive_rating'].mean())
+    most_balanced = df.loc[df['balance_score'].idxmin()]
+    st.write(f"⚖️ **Most Balanced Team**: {most_balanced['team_name']} (closest to league average in both offense and defense)")
 
 def main():
     st.title("🏀 Basketball Stats Viewer")
@@ -6805,6 +7291,7 @@ def main():
                 # 🏀 Add Full Game Score Progression Chart
                 st.subheader(f"📈 Score Lead Progression - Full Game")
                 plot_score_lead_full_game(selected_game_id)
+
 
     elif page == "Five Player Segments":
         display_five_player_segments()
@@ -6937,7 +7424,8 @@ def main():
                 st.warning("No data available for Assists vs Turnovers")
 
             display_avg_substitutions_graph()
-
+            display_team_rating_analysis()
+            
     elif page == "Head-to-Head Comparison":
         df = fetch_team_data()
         if df.empty:
@@ -7006,8 +7494,18 @@ def main():
             if player_name:
                 # Main shot chart
                 st.write(f"### Shot Chart for {player_name}")
-                generate_shot_chart(player_name, show_heatmap=show_heatmap, shot_types=shot_type)
-                
+                processed_shots, zone_stats, fig = generate_improved_shot_chart(player_name=player_name)
+                st.pyplot(fig)  # Display the figure
+
+                # Display zone stats
+                st.write("### Shot Zone Analysis")
+                st.dataframe(zone_stats)
+
+                # Display misclassification info
+                misclassified_count = processed_shots['type_mismatch'].sum()
+                if misclassified_count > 0:
+                    st.warning(f"{misclassified_count} shots ({misclassified_count/len(processed_shots)*100:.1f}%) have shot type mismatches")
+                                
                 # Shot distribution charts
                 st.write("### Shot Distribution Analysis")
                 col_dist1, col_dist2 = st.columns(2)

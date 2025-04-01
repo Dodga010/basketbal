@@ -3585,7 +3585,14 @@ def analyze_all_team_lineups():
 
     all_lineup_stats = []
     all_players = set()
-    player_impact_stats = defaultdict(lambda: {'total_plus_minus': 0, 'total_actions': 0, 'lineups': 0})
+    # Enhanced player impact tracking with possessions
+    player_impact_stats = defaultdict(lambda: {
+        'total_plus_minus': 0, 
+        'total_actions': 0, 
+        'total_possessions': 0,
+        'lineups': 0,
+        'weighted_plus_minus': 0
+    })
     lineup_games = defaultdict(set)
     lineup_teams = defaultdict(set)
     
@@ -3625,10 +3632,14 @@ def analyze_all_team_lineups():
                 if team_num == 2:
                     team_stats['net_points'] = -team_stats['net_points']
                 
+                # Calculate estimated possessions for each segment
+                team_stats['possessions'] = (team_stats['Duration'] / 2.5).round(1)
+                
                 # Group by lineup for this game
                 game_lineup_stats = team_stats.groupby('lineup_str').agg({
                     'Duration': 'sum',
-                    'net_points': 'sum'
+                    'net_points': 'sum',
+                    'possessions': 'sum'
                 }).reset_index()
                 
                 game_lineup_stats['team_name'] = team_name
@@ -3644,9 +3655,13 @@ def analyze_all_team_lineups():
                         for player in row[f'team{team_num}_five']:
                             if isinstance(player, str):  # Only process valid player names
                                 all_players.add(player)
+                                # Track raw stats
                                 player_impact_stats[player]['total_plus_minus'] += row['net_points']
                                 player_impact_stats[player]['total_actions'] += row['Duration']
+                                player_impact_stats[player]['total_possessions'] += row['possessions']
                                 player_impact_stats[player]['lineups'] += 1
+                                # Track possession-weighted plus/minus
+                                player_impact_stats[player]['weighted_plus_minus'] += row['net_points'] * row['possessions']
                 
                 all_lineup_stats.append(game_lineup_stats)
     
@@ -3659,7 +3674,8 @@ def analyze_all_team_lineups():
     # Calculate aggregate statistics
     lineup_stats = all_stats.groupby(['lineup_str', 'team_name']).agg({
         'Duration': 'sum',
-        'net_points': 'sum'
+        'net_points': 'sum',
+        'possessions': 'sum'
     }).reset_index()
     
     # Add games played and team info
@@ -3673,12 +3689,34 @@ def analyze_all_team_lineups():
     lineup_stats['Reliability'] = (lineup_stats['Duration'] / lineup_stats['Duration'].max() * 100).round(1)
     lineup_stats['Avg Plus/Minus per Game'] = (lineup_stats['Plus/Minus'] / lineup_stats['Games Played']).round(2)
     
-    # Calculate estimated possessions based on actions
-    # Approximately 1 possession = 2.5 actions (this is an estimated ratio)
-    lineup_stats['Estimated Possessions'] = (lineup_stats['Duration'] / 2.5).round(1)
+    # Use pre-calculated possessions instead of re-calculating
+    lineup_stats['Estimated Possessions'] = lineup_stats['possessions'].round(1)
     
-    # Calculate Plus/Minus per 100 possessions - keep the original column name to avoid breaking existing code
+    # Calculate Plus/Minus per 100 possessions
     lineup_stats['Plus/Minus per 100'] = (lineup_stats['Plus/Minus'] / lineup_stats['Estimated Possessions'] * 100).round(2)
+    
+    # Finalize player impact stats with weighted metrics
+    player_stats = []
+    for player, stats in player_impact_stats.items():
+        if stats['total_possessions'] > 0:
+            # Calculate possession-weighted plus/minus per 100
+            weighted_pm_per_100 = (stats['weighted_plus_minus'] / stats['total_possessions']) * 100
+            
+            player_stats.append({
+                'player_name': player,
+                'total_actions': stats['total_actions'],
+                'total_possessions': stats['total_possessions'],
+                'total_plus_minus': stats['total_plus_minus'],
+                'total_lineups': stats['lineups'],
+                'raw_plus_minus_per_100': (stats['total_plus_minus'] / stats['total_possessions'] * 100).round(2),
+                'weighted_plus_minus_per_100': weighted_pm_per_100.round(2),
+                'impact_score': (weighted_pm_per_100 * (stats['total_possessions'] / 100)).round(2)  # Scale by possession count
+            })
+    
+    # Convert player stats to DataFrame and sort
+    player_impact_df = pd.DataFrame(player_stats)
+    if not player_impact_df.empty:
+        player_impact_df = player_impact_df.sort_values('weighted_plus_minus_per_100', ascending=False)
     
     # Rename columns for clarity
     lineup_stats = lineup_stats.rename(columns={
@@ -3686,6 +3724,9 @@ def analyze_all_team_lineups():
         'team_name': 'Primary Team',
         'Duration': 'Total Actions'
     })
+    
+    # Remove the raw possessions column
+    lineup_stats = lineup_stats.drop(columns=['possessions'])
     
     # Arrange columns in desired order
     lineup_stats = lineup_stats[[
@@ -3701,7 +3742,7 @@ def analyze_all_team_lineups():
         'Reliability'
     ]]
     
-    return lineup_stats, sorted(list(all_players)), player_impact_stats, teams, len(games)
+    return lineup_stats, sorted(list(all_players)), player_impact_df, teams, len(games)
 
 def analyze_lineup_patterns(lineup_stats, player_impact_stats):
     """Analyze patterns in lineup performance to identify good and bad combinations."""

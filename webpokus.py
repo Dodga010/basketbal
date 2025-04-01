@@ -4392,243 +4392,255 @@ def display_team_analysis():
                 The **Team Impact Breakdown** shows how the player performs with different teams, calculated by finding all lineups containing the player and grouping them by team.
                 """)
         
-        # NEW: Tab 3 - Team Analysis
-        with impact_tab3:
-            st.subheader("Team-Specific Analysis")
-            
-            # Team selection dropdown
-            analysis_team = st.selectbox(
-                "Select Team for Analysis:",
-                teams,
-                key="team_analysis_selector"
-            )
-            
-            # Get all lineups for the selected team
-            team_lineups = stats[
-                (stats['Primary Team'] == analysis_team) | 
-                (stats['Teams'].str.contains(analysis_team))
-            ].copy()
-            
-            if team_lineups.empty:
-                st.warning(f"No lineup data available for {analysis_team}")
-            else:
-                # Team overview metrics
-                st.subheader(f"📊 {analysis_team} Overview")
+                    # NEW: Tab 3 - Team Analysis
+            with impact_tab3:
+                st.subheader("Team-Specific Analysis")
                 
-                # Calculate team summary metrics
-                team_metrics_col1, team_metrics_col2, team_metrics_col3, team_metrics_col4 = st.columns(4)
-                
-                with team_metrics_col1:
-                    st.metric(
-                        "Total Lineups",
-                        len(team_lineups)
-                    )
-                with team_metrics_col2:
-                    st.metric(
-                        "Avg Plus/Minus per 100",
-                        f"{team_lineups['Plus/Minus per 100'].mean():.2f}"
-                    )
-                with team_metrics_col3:
-                    avg_actions = team_lineups['Total Actions'].mean()
-                    st.metric(
-                        "Avg Actions per Lineup",
-                        f"{avg_actions:.1f}"
-                    )
-                with team_metrics_col4:
-                    avg_poss = team_lineups['Estimated Possessions'].mean()
-                    st.metric(
-                        "Avg Possessions per Lineup",
-                        f"{avg_poss:.1f}"
-                    )
-                
-                # Best lineups for this team
-                st.subheader("Best Performing Lineups")
-                
-                # Sort by Plus/Minus per 100 and take top 5
-                best_team_lineups = team_lineups.sort_values('Plus/Minus per 100', ascending=False).head(5)
-                
-                # Create a bar chart of top lineups
-                fig, ax = plt.subplots(figsize=(12, 6))
-                
-                # Create shorter lineup labels for display
-                best_team_lineups['Short Lineup'] = best_team_lineups['Lineup'].apply(
-                    lambda x: x.replace(' | ', '\n').replace(' ', '\n')
+                # Team selection dropdown
+                analysis_team = st.selectbox(
+                    "Select Team for Analysis:",
+                    teams,
+                    key="team_analysis_selector"
                 )
                 
-                sns.barplot(
-                    x='Plus/Minus per 100',
-                    y='Short Lineup',
-                    data=best_team_lineups,
-                    ax=ax
-                )
+                # Get all lineups for the selected team
+                team_lineups = stats[
+                    (stats['Primary Team'] == analysis_team) | 
+                    (stats['Teams'].str.contains(analysis_team))
+                ].copy()
                 
-                ax.set_title(f'Top 5 Lineups for {analysis_team} (by Plus/Minus per 100)')
-                ax.set_xlabel('Plus/Minus per 100 Possessions')
-                ax.set_ylabel('Lineups')
-                
-                # Add data labels
-                for i, v in enumerate(best_team_lineups['Plus/Minus per 100']):
-                    ax.text(v + 0.5, i, f'{v:.2f}', va='center')
-                
-                st.pyplot(fig)
-                
-                # Find players in this team's lineups
-                team_players = set()
-                
-                for lineup in team_lineups['Lineup']:
-                    players = lineup.split(' | ')
-                    for player in players:
-                        team_players.add(player)
-                
-                # Get impact data for these players
-                team_player_impact = player_impact[player_impact['player_name'].isin(team_players)].copy()
-                
-                # Player performance in this team
-                st.subheader(f"Player Performance in {analysis_team}")
-                
-                if not team_player_impact.empty:
-                    # Sort by weighted plus/minus
-                    team_player_impact = team_player_impact.sort_values('weighted_plus_minus_per_100', ascending=False)
+                if team_lineups.empty:
+                    st.warning(f"No lineup data available for {analysis_team}")
+                else:
+                    # Team overview metrics
+                    st.subheader(f"📊 {analysis_team} Overview")
                     
-                    # Display all players from this team
-                    player_display_cols = [
-                        'player_name', 'total_possessions', 'weighted_plus_minus_per_100', 'impact_score'
-                    ]
+                    # Calculate team summary metrics
+                    team_metrics_col1, team_metrics_col2, team_metrics_col3, team_metrics_col4 = st.columns(4)
                     
-                    player_display_df = team_player_impact[player_display_cols].copy()
-                    player_display_df.columns = [
-                        'Player', 'Possessions', 'Plus/Minus per 100', 'Impact Score'
-                    ]
+                    with team_metrics_col1:
+                        st.metric(
+                            "Total Lineups",
+                            len(team_lineups)
+                        )
+                    with team_metrics_col2:
+                        st.metric(
+                            "Avg Plus/Minus per 100",
+                            f"{team_lineups['Plus/Minus per 100'].mean():.2f}"
+                        )
+                    with team_metrics_col3:
+                        avg_actions = team_lineups['Total Actions'].mean()
+                        st.metric(
+                            "Avg Actions per Lineup",
+                            f"{avg_actions:.1f}"
+                        )
+                    with team_metrics_col4:
+                        avg_poss = team_lineups['Estimated Possessions'].mean()
+                        st.metric(
+                            "Avg Possessions per Lineup",
+                            f"{avg_poss:.1f}"
+                        )
                     
-                    st.dataframe(
-                        player_display_df.style.format({
-                            'Possessions': '{:.0f}',
-                            'Plus/Minus per 100': '{:.2f}',
-                            'Impact Score': '{:.2f}'
-                        }),
-                        height=400
+                    # Best lineups for this team - with minimum possessions filter
+                    st.subheader("Best Performing Lineups")
+
+                    # Add a filter for minimum possessions
+                    min_lineup_possessions = st.slider(
+                        "Minimum Possessions for Lineup:",
+                        min_value=10,
+                        max_value=int(team_lineups['Estimated Possessions'].max()) if not team_lineups.empty else 100,
+                        value=50,  # Default to 50 possessions minimum
+                        help="Filter out lineups with fewer possessions to ensure statistical significance"
                     )
-                    
-                    # Player impact distribution visualization
-                    st.subheader("Player Impact Distribution")
-                    
-                    # Create two columns for different visualizations
-                    vis_col1, vis_col2 = st.columns(2)
-                    
-                    with vis_col1:
-                        # Create a temporary column with absolute values for the size parameter
-                        team_player_impact['abs_impact_score'] = team_player_impact['impact_score'].abs()
+
+                    # Apply possession filter and sort by Plus/Minus per 100
+                    filtered_team_lineups = team_lineups[team_lineups['Estimated Possessions'] >= min_lineup_possessions]
+
+                    if filtered_team_lineups.empty:
+                        st.warning(f"No lineups with at least {min_lineup_possessions} possessions. Try lowering the minimum.")
+                    else:
+                        # Sort by Plus/Minus per 100 and take top 5
+                        best_team_lineups = filtered_team_lineups.sort_values('Plus/Minus per 100', ascending=False).head(5)
                         
-                        # Create scatter plot of player impact vs possessions with absolute values for size
-                        fig_scatter = px.scatter(
-                            team_player_impact,
-                            x='total_possessions',
-                            y='weighted_plus_minus_per_100',
-                            size='abs_impact_score',  # Use absolute values for size
-                            hover_name='player_name',
-                            color='impact_score',  # Use original impact score for color
-                            title=f'Player Impact vs. Playing Time ({analysis_team})',
-                            labels={
-                                'total_possessions': 'Total Possessions',
-                                'weighted_plus_minus_per_100': 'Weighted Plus/Minus per 100',
-                                'impact_score': 'Impact Score'
-                            }
+                        # Create a bar chart of top lineups
+                        fig, ax = plt.subplots(figsize=(12, 6))
+                        
+                        # Create shorter lineup labels for display that include possession count
+                        best_team_lineups['Short Lineup'] = best_team_lineups.apply(
+                            lambda x: f"{x['Lineup'].replace(' | ', '-')} ({int(x['Estimated Possessions'])} poss)",
+                            axis=1
                         )
-                        st.plotly_chart(fig_scatter)
-                    
-                    with vis_col2:
-                        # Create a horizontal bar chart for top 10 players
-                        top_team_players = team_player_impact.head(min(10, len(team_player_impact)))
                         
-                        fig_bar = px.bar(
-                            top_team_players,
-                            y='player_name',
-                            x='weighted_plus_minus_per_100',
-                            orientation='h',
-                            title=f'Top Players by Impact ({analysis_team})',
-                            labels={
-                                'player_name': 'Player',
-                                'weighted_plus_minus_per_100': 'Weighted Plus/Minus per 100'
-                            }
+                        # Sort for better visualization (tallest bars first)
+                        best_team_lineups = best_team_lineups.sort_values('Plus/Minus per 100')
+                        
+                        # Create horizontal bar chart with colored bars based on plus/minus value
+                        bars = sns.barplot(
+                            x='Plus/Minus per 100',
+                            y='Short Lineup',
+                            data=best_team_lineups,
+                            ax=ax,
+                            palette='RdYlGn_r'  # Red for negative, green for positive
                         )
-                        st.plotly_chart(fig_bar)
-                    
-                    # Player Chemistry Analysis
-                    st.subheader("Player Chemistry Analysis")
-                    
-                    # Create a matrix of how players perform together
-                    chemistry_data = []
-                    
-                    # Get the top N players by impact for chemistry analysis
-                    top_n = min(8, len(team_player_impact))
-                    chemistry_players = team_player_impact.head(top_n)['player_name'].tolist()
-                    
-                    # Create pairs and analyze their performance together
-                    for i, player1 in enumerate(chemistry_players):
-                        for j, player2 in enumerate(chemistry_players):
-                            if i < j:  # avoid duplicates and self-pairs
-                                # Find lineups containing both players
-                                pair_lineups = team_lineups[
-                                    team_lineups['Lineup'].str.contains(player1) & 
-                                    team_lineups['Lineup'].str.contains(player2)
-                                ]
-                                
-                                if not pair_lineups.empty:
-                                    # Calculate weighted plus-minus for this pair
-                                    total_poss = pair_lineups['Estimated Possessions'].sum()
-                                    weighted_pm = (pair_lineups['Plus/Minus'] * pair_lineups['Estimated Possessions']).sum() / total_poss
-                                    
-                                    chemistry_data.append({
-                                        'Player 1': player1,
-                                        'Player 2': player2,
-                                        'Plus/Minus per 100': round(weighted_pm * 100, 2),
-                                        'Possessions': total_poss,
-                                        'Lineups': len(pair_lineups)
-                                    })
-                    
-                    if chemistry_data:
-                        # Convert to DataFrame and sort
-                        chemistry_df = pd.DataFrame(chemistry_data)
-                        chemistry_df = chemistry_df.sort_values('Plus/Minus per 100', ascending=False)
                         
-                        # Display best player pairs
-                        st.subheader("Best Player Pairs")
+                        # Style the chart
+                        ax.set_title(f'Top 5 Lineups for {analysis_team} (Minimum {min_lineup_possessions} Possessions)')
+                        ax.set_xlabel('Plus/Minus per 100 Possessions')
+                        ax.set_ylabel('')  # Remove y-axis label as it's clear these are lineups
+                        
+                        # Add data labels
+                        for i, v in enumerate(best_team_lineups['Plus/Minus per 100']):
+                            ax.text(v + 0.5, i, f'{v:.2f}', va='center')
+                        
+                        # Set a vertical line at 0 for reference
+                        ax.axvline(x=0, color='black', linestyle='-', linewidth=0.5)
+                        
+                        st.pyplot(fig)
+                        
+                        # Also display the lineup data in a table with more details
+                        st.subheader("Detailed Stats for Top Lineups")
+                        
+                        # Select columns for display
+                        display_cols = ['Lineup', 'Estimated Possessions', 'Games Played', 'Plus/Minus', 'Plus/Minus per 100']
+                        
+                        # Format the table data
+                        lineup_table = best_team_lineups[display_cols].copy()
                         
                         st.dataframe(
-                            chemistry_df.style.format({
-                                'Plus/Minus per 100': '{:.2f}',
-                                'Possessions': '{:.0f}',
-                                'Lineups': '{:.0f}'
+                            lineup_table.style.format({
+                                'Estimated Possessions': '{:.0f}',
+                                'Games Played': '{:.0f}',
+                                'Plus/Minus': '{:.1f}',
+                                'Plus/Minus per 100': '{:.2f}'
                             }),
-                            height=300
+                            height=250
+                        )
+                    
+                    # Find players in this team's lineups
+                    team_players = set()
+                    
+                    for lineup in team_lineups['Lineup']:
+                        players = lineup.split(' | ')
+                        for player in players:
+                            team_players.add(player)
+                    
+                    # Get impact data for these players
+                    team_player_impact = player_impact[player_impact['player_name'].isin(team_players)].copy()
+                    
+                    # Player performance in this team
+                    st.subheader(f"Player Performance in {analysis_team}")
+                    
+                    if not team_player_impact.empty:
+                        # Sort by weighted plus/minus
+                        team_player_impact = team_player_impact.sort_values('weighted_plus_minus_per_100', ascending=False)
+                        
+                        # Add minimum possessions filter for players
+                        min_player_possessions = st.slider(
+                            "Minimum Player Possessions:",
+                            min_value=10,
+                            max_value=int(team_player_impact['total_possessions'].max()),
+                            value=100,  # Default to 100 possessions minimum
+                            help="Filter out players with limited playing time"
                         )
                         
-                        # Visualization of player chemistry
-                        top_pairs = chemistry_df.head(min(8, len(chemistry_df)))
+                        # Apply filter
+                        filtered_player_impact = team_player_impact[team_player_impact['total_possessions'] >= min_player_possessions]
                         
-                        # Create pair labels
-                        top_pairs['Pair'] = top_pairs.apply(
-                            lambda x: f"{x['Player 1']}\n& {x['Player 2']}", axis=1
-                        )
-                        
-                        fig_pairs = px.bar(
-                            top_pairs,
-                            y='Pair',
-                            x='Plus/Minus per 100',
-                            color='Possessions',
-                            title=f'Best Player Pairs in {analysis_team}',
-                            labels={
-                                'Pair': 'Player Pair',
-                                'Plus/Minus per 100': 'Plus/Minus per 100 Possessions'
-                            }
-                        )
-                        st.plotly_chart(fig_pairs)
+                        if filtered_player_impact.empty:
+                            st.warning(f"No players with at least {min_player_possessions} possessions. Try lowering the minimum.")
+                        else:
+                            # Display all players from this team
+                            player_display_cols = [
+                                'player_name', 'total_possessions', 'weighted_plus_minus_per_100', 'impact_score', 'total_lineups'
+                            ]
+                            
+                            player_display_df = filtered_player_impact[player_display_cols].copy()
+                            player_display_df.columns = [
+                                'Player', 'Possessions', 'Plus/Minus per 100', 'Impact Score', 'Lineups'
+                            ]
+                            
+                            st.dataframe(
+                                player_display_df.style.format({
+                                    'Possessions': '{:.0f}',
+                                    'Plus/Minus per 100': '{:.2f}',
+                                    'Impact Score': '{:.2f}',
+                                    'Lineups': '{:.0f}'
+                                }),
+                                height=400
+                            )
+                            
+                            # Player impact distribution visualization
+                            st.subheader("Player Impact Distribution")
+                            
+                            # Create two columns for different visualizations
+                            vis_col1, vis_col2 = st.columns(2)
+                            
+                            with vis_col1:
+                                # Create scatter plot of player impact vs possessions
+                                # Fix for negative impact scores in size parameter
+                                filtered_player_impact['abs_impact_score'] = filtered_player_impact['impact_score'].abs() + 5  # Add constant to ensure visibility
+                                
+                                fig_scatter = px.scatter(
+                                    filtered_player_impact,
+                                    x='total_possessions',
+                                    y='weighted_plus_minus_per_100',
+                                    size='abs_impact_score',  # Use absolute values for size
+                                    hover_name='player_name',
+                                    color='weighted_plus_minus_per_100',  # Use weighted plus/minus for color
+                                    color_continuous_scale='RdYlGn',  # Red to Green color scale
+                                    title=f'Player Impact vs. Playing Time ({analysis_team})',
+                                    labels={
+                                        'total_possessions': 'Total Possessions',
+                                        'weighted_plus_minus_per_100': 'Weighted Plus/Minus per 100',
+                                        'player_name': 'Player'
+                                    }
+                                )
+                                # Add reference line at 0
+                                fig_scatter.add_hline(y=0, line_width=1, line_color="black", line_dash="dash")
+                                st.plotly_chart(fig_scatter)
+                            
+                            with vis_col2:
+                                # Create a horizontal bar chart for top players
+                                top_count = min(10, len(filtered_player_impact))
+                                top_team_players = filtered_player_impact.head(top_count)
+                                
+                                # For bar chart, sort ascending so highest value is at top
+                                top_team_players = top_team_players.sort_values('weighted_plus_minus_per_100')
+                                
+                                fig_bar = px.bar(
+                                    top_team_players,
+                                    y='player_name',
+                                    x='weighted_plus_minus_per_100',
+                                    orientation='h',
+                                    title=f'Top {top_count} Players by Impact ({analysis_team})',
+                                    labels={
+                                        'player_name': 'Player',
+                                        'weighted_plus_minus_per_100': 'Weighted Plus/Minus per 100'
+                                    },
+                                    color='weighted_plus_minus_per_100',
+                                    color_continuous_scale='RdYlGn'  # Red to Green color scale
+                                )
+                                # Add reference line at 0
+                                fig_bar.add_vline(x=0, line_width=1, line_color="black", line_dash="dash")
+                                st.plotly_chart(fig_bar)
+                            
+                            # Add context for interpreting the data
+                            with st.expander("Understanding Team Analysis"):
+                                st.markdown("""
+                                ### How to Interpret Team Analysis
+                                
+                                **Team Overview**: Summary metrics showing how the team performs overall.
+                                
+                                **Best Performing Lineups**: Shows the top lineups filtered by a minimum number of possessions. Higher plus/minus values indicate better performance.
+                                
+                                **Player Impact Distribution**:
+                                - **Impact vs. Playing Time**: Shows each player's efficiency (y-axis) vs. volume (x-axis).
+                                - **Bar Chart**: Shows the weighted plus/minus per 100 possessions for the top players.
+                                
+                                Players in the top right of the scatter plot are your most valuable players - they combine high efficiency with significant playing time.
+                                """)
                     else:
-                        st.info("Not enough data to analyze player chemistry")
-                else:
-                    st.warning("No player impact data available for this team")
-    else:
-        st.info("No player impact data available for analysis.")
+                        st.warning("No player impact data available for this team")
 
 import sqlite3
 import pandas as pd

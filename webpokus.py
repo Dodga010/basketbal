@@ -3672,7 +3672,13 @@ def analyze_all_team_lineups():
     # Calculate additional metrics
     lineup_stats['Reliability'] = (lineup_stats['Duration'] / lineup_stats['Duration'].max() * 100).round(1)
     lineup_stats['Avg Plus/Minus per Game'] = (lineup_stats['Plus/Minus'] / lineup_stats['Games Played']).round(2)
-    lineup_stats['Plus/Minus per 100'] = (lineup_stats['Plus/Minus'] / lineup_stats['Duration'] * 100).round(2)
+    
+    # Calculate estimated possessions based on actions
+    # Approximately 1 possession = 2.5 actions (this is an estimated ratio)
+    lineup_stats['Estimated Possessions'] = (lineup_stats['Duration'] / 2.5).round(1)
+    
+    # Calculate Plus/Minus per 100 possessions - keep the original column name to avoid breaking existing code
+    lineup_stats['Plus/Minus per 100'] = (lineup_stats['Plus/Minus'] / lineup_stats['Estimated Possessions'] * 100).round(2)
     
     # Rename columns for clarity
     lineup_stats = lineup_stats.rename(columns={
@@ -3687,6 +3693,7 @@ def analyze_all_team_lineups():
         'Primary Team', 
         'Teams',
         'Total Actions',
+        'Estimated Possessions',
         'Games Played',
         'Plus/Minus',
         'Avg Plus/Minus per Game',
@@ -4129,13 +4136,6 @@ def display_team_analysis():
     
     st.plotly_chart(fig)
 
- # After displaying the main lineup stats, add:
-    if not stats.empty:
-        display_pattern_analysis(stats, player_impact)
-
-    # Add after your main statistics display:
-    if not stats.empty:
-        display_player_impact_analysis(filtered_stats) 
 
 import sqlite3
 import pandas as pd

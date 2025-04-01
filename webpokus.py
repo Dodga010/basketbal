@@ -3686,31 +3686,33 @@ def analyze_all_team_lineups():
     lineup_stats = lineup_stats.rename(columns={'net_points': 'Plus/Minus'})
     
     # Calculate additional metrics
-    lineup_stats['Reliability'] = (lineup_stats['Duration'] / lineup_stats['Duration'].max() * 100).round(1)
-    lineup_stats['Avg Plus/Minus per Game'] = (lineup_stats['Plus/Minus'] / lineup_stats['Games Played']).round(2)
+    lineup_stats['Reliability'] = round(lineup_stats['Duration'] / lineup_stats['Duration'].max() * 100, 1)
+    lineup_stats['Avg Plus/Minus per Game'] = round(lineup_stats['Plus/Minus'] / lineup_stats['Games Played'], 2)
     
     # Use pre-calculated possessions instead of re-calculating
     lineup_stats['Estimated Possessions'] = lineup_stats['possessions'].round(1)
     
     # Calculate Plus/Minus per 100 possessions
-    lineup_stats['Plus/Minus per 100'] = (lineup_stats['Plus/Minus'] / lineup_stats['Estimated Possessions'] * 100).round(2)
+    lineup_stats['Plus/Minus per 100'] = round(lineup_stats['Plus/Minus'] / lineup_stats['Estimated Possessions'] * 100, 2)
     
     # Finalize player impact stats with weighted metrics
     player_stats = []
     for player, stats in player_impact_stats.items():
         if stats['total_possessions'] > 0:
-            # Calculate possession-weighted plus/minus per 100
-            weighted_pm_per_100 = (stats['weighted_plus_minus'] / stats['total_possessions']) * 100
+            # Calculate metrics without using .round() method
+            raw_pm_per_100 = round((stats['total_plus_minus'] / stats['total_possessions'] * 100), 2)
+            weighted_pm_per_100 = round((stats['weighted_plus_minus'] / stats['total_possessions']), 2)
+            impact_score = round((weighted_pm_per_100 * (stats['total_possessions'] / 100)), 2)
             
             player_stats.append({
                 'player_name': player,
                 'total_actions': stats['total_actions'],
-                'total_possessions': stats['total_possessions'],
-                'total_plus_minus': stats['total_plus_minus'],
+                'total_possessions': round(stats['total_possessions'], 1),
+                'total_plus_minus': round(stats['total_plus_minus'], 1),
                 'total_lineups': stats['lineups'],
-                'raw_plus_minus_per_100': (stats['total_plus_minus'] / stats['total_possessions'] * 100).round(2),
-                'weighted_plus_minus_per_100': weighted_pm_per_100.round(2),
-                'impact_score': (weighted_pm_per_100 * (stats['total_possessions'] / 100)).round(2)  # Scale by possession count
+                'raw_plus_minus_per_100': raw_pm_per_100,
+                'weighted_plus_minus_per_100': weighted_pm_per_100,
+                'impact_score': impact_score
             })
     
     # Convert player stats to DataFrame and sort
@@ -4176,6 +4178,132 @@ def display_team_analysis():
     )
     
     st.plotly_chart(fig)
+    
+    # NEW SECTION: Add Player Impact Analysis
+    st.header("🏀 Player Impact Analysis (Weighted by Possessions)")
+
+    # Check if we have player impact data to display
+    if isinstance(player_impact, pd.DataFrame) and not player_impact.empty:
+        # Filter player impact data based on selected team if applicable
+        if selected_team != "All Teams":
+            # This is tricky as players can play for multiple teams
+            # For now, we'll keep all players since we don't have a direct team association
+            # But we could filter based on lineup association with teams in a more complex implementation
+            pass
+            
+        # Create tabs for different views
+        impact_tab1, impact_tab2 = st.tabs(["Overall Impact", "Detail View"])
+        
+        with impact_tab1:
+            st.subheader("Top Players by Weighted Impact")
+            
+            # Display top 15 players by weighted impact
+            top_players = player_impact.nlargest(15, 'weighted_plus_minus_per_100')
+            
+            # Format DataFrame for display
+            display_cols = [
+                'player_name', 'total_possessions', 'weighted_plus_minus_per_100', 'impact_score'
+            ]
+            
+            # Create formatted DataFrame with renamed columns
+            display_df = top_players[display_cols].copy()
+            display_df.columns = [
+                'Player', 'Possessions', 'Plus/Minus per 100 Poss.', 'Impact Score'
+            ]
+            
+            # Display formatted table
+            st.dataframe(
+                display_df.style.format({
+                    'Possessions': '{:.0f}',
+                    'Plus/Minus per 100 Poss.': '{:.2f}',
+                    'Impact Score': '{:.2f}'
+                }),
+                height=400
+            )
+            
+            # Add visualization - bar chart of player impact
+            fig, ax = plt.subplots(figsize=(10, 6))
+            
+            # Plot top 10 players
+            plot_data = top_players.head(10)
+            sns.barplot(
+                x='weighted_plus_minus_per_100', 
+                y='player_name',
+                data=plot_data,
+                ax=ax
+            )
+            
+            ax.set_title('Top 10 Players by Weighted Plus/Minus per 100 Possessions')
+            ax.set_xlabel('Plus/Minus per 100 Possessions (Weighted)')
+            ax.set_ylabel('Player')
+            
+            # Add data labels
+            for i, v in enumerate(plot_data['weighted_plus_minus_per_100']):
+                ax.text(v + 0.1, i, f'{v:.2f}', va='center')
+                
+            st.pyplot(fig)
+            
+        with impact_tab2:
+            st.subheader("Detailed Player Impact Data")
+            
+            # Add search/filter capability
+            search_name = st.text_input("Search for player by name:", "")
+            min_possessions = st.slider("Minimum Possessions:", 
+                                      min_value=0, 
+                                      max_value=int(player_impact['total_possessions'].max()), 
+                                      value=50)
+            
+            # Apply filters
+            filtered_players = player_impact.copy()
+            if search_name:
+                filtered_players = filtered_players[filtered_players['player_name'].str.contains(search_name, case=False)]
+            filtered_players = filtered_players[filtered_players['total_possessions'] >= min_possessions]
+            
+            # Display filtered data
+            if not filtered_players.empty:
+                # All columns for detailed view
+                detail_cols = [
+                    'player_name', 'total_possessions', 'total_plus_minus', 
+                    'raw_plus_minus_per_100', 'weighted_plus_minus_per_100', 'impact_score', 'total_lineups'
+                ]
+                
+                # Renamed columns for display
+                detail_display = filtered_players[detail_cols].copy()
+                detail_display.columns = [
+                    'Player', 'Possessions', 'Total +/-', 
+                    'Raw +/- per 100', 'Weighted +/- per 100', 'Impact Score', 'Lineups'
+                ]
+                
+                st.dataframe(
+                    detail_display.style.format({
+                        'Possessions': '{:.0f}',
+                        'Total +/-': '{:.1f}',
+                        'Raw +/- per 100': '{:.2f}',
+                        'Weighted +/- per 100': '{:.2f}',
+                        'Impact Score': '{:.2f}',
+                        'Lineups': '{:.0f}'
+                    }),
+                    height=500
+                )
+            else:
+                st.warning("No players match the selected filters.")
+                
+            # Explanation of metrics
+            with st.expander("About These Metrics"):
+                st.markdown("""
+                ### Understanding Player Impact Metrics
+                
+                - **Possessions**: Total estimated possessions the player was on court
+                - **Total +/-**: Raw plus-minus across all lineups
+                - **Raw +/- per 100**: Simple plus-minus per 100 possessions
+                - **Weighted +/- per 100**: Plus-minus per 100 possessions weighted by possession time
+                - **Impact Score**: Weighted impact accounting for both efficiency and volume
+                - **Lineups**: Number of different 5-player combinations the player was part of
+                
+                The **weighted metrics** give more importance to longer lineup stints, providing a more accurate picture of player impact.
+                """)
+    else:
+        st.info("No player impact data available for analysis.")
 
 
 import sqlite3

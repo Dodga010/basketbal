@@ -7755,6 +7755,584 @@ def display_team_rating_analysis():
     most_balanced = df.loc[df['balance_score'].idxmin()]
     st.write(f"⚖️ **Most Balanced Team**: {most_balanced['team_name']} (closest to league average in both offense and defense)")
 	
+def analyze_team_performance_trends(team_name):
+    """
+    Analyze a team's performance against opponents of varying strength
+    and compare with how other teams performed against the same opponents
+    
+    Parameters:
+    -----------
+    team_name : str
+        Name of the team to analyze
+    
+    Returns:
+    --------
+    dict
+        Dictionary with performance metrics against teams of different strengths
+        including similarity comparisons with how other teams performed
+    """
+    # Connect to database
+    conn = sqlite3.connect(db_path)
+    
+    # 1. Calculate team strength ratings for all teams
+    strength_query = """
+    WITH team_games AS (
+        SELECT 
+            t1.game_id,
+            t1.name AS team_name,
+            t2.name AS opponent_name,
+            (t1.p1_score + t1.p2_score + t1.p3_score + t1.p4_score) AS team_score,
+            (t2.p1_score + t2.p2_score + t2.p3_score + t2.p4_score) AS opponent_score,
+            ((t1.p1_score + t1.p2_score + t1.p3_score + t1.p4_score) - 
+             (t2.p1_score + t2.p2_score + t2.p3_score + t2.p4_score)) AS point_diff
+        FROM Teams t1
+        JOIN Teams t2 ON t1.game_id = t2.game_id AND t1.tm != t2.tm
+    )
+    SELECT 
+        team_name,
+        AVG(point_diff) AS avg_point_diff,
+        COUNT(DISTINCT game_id) AS games_played
+    FROM team_games
+    GROUP BY team_name
+    """
+    
+    team_strengths = pd.read_sql_query(strength_query, conn)
+    
+    # Calculate a simple strength rating based on point differential
+    if not team_strengths.empty:
+        team_strengths['strength_rating'] = team_strengths['avg_point_diff']
+        
+        # Normalize ratings to range from 1-10 for easier understanding
+        min_rating = team_strengths['strength_rating'].min()
+        max_rating = team_strengths['strength_rating'].max()
+        range_rating = max_rating - min_rating
+        
+        if range_rating > 0:  # Avoid division by zero
+            team_strengths['strength_rating_normalized'] = 1 + 9 * (team_strengths['strength_rating'] - min_rating) / range_rating
+        else:
+            team_strengths['strength_rating_normalized'] = 5.0  # Default if all teams have same rating
+    else:
+        conn.close()
+        return None
+    
+    # 2. Get the selected team's games with performance metrics
+    team_games_query = f"""
+    WITH team_matches AS (
+        SELECT 
+            t1.game_id,
+            t1.name AS team_name,
+            t2.name AS opponent_name,
+            (t1.p1_score + t1.p2_score + t1.p3_score + t1.p4_score) AS team_score,
+            (t2.p1_score + t2.p2_score + t2.p3_score + t2.p4_score) AS opponent_score,
+            ((t1.p1_score + t1.p2_score + t1.p3_score + t1.p4_score) - 
+             (t2.p1_score + t2.p2_score + t2.p3_score + t2.p4_score)) AS point_diff,
+            
+            -- Team stats for that specific game
+            t1.field_goal_percentage AS team_fg_pct,
+            t1.three_point_percentage AS team_3pt_pct,
+            t1.assists AS team_assists,
+            t1.rebounds_total AS team_rebounds,
+            t1.turnovers AS team_turnovers
+        FROM Teams t1
+        JOIN Teams t2 ON t1.game_id = t2.game_id AND t1.tm != t2.tm
+        WHERE t1.name = ?
+        ORDER BY t1.game_id DESC
+    )
+    SELECT * FROM team_matches
+    LIMIT 15  -- Get last 15 games for analysis
+    """
+    
+    # Get the selected team's recent games
+    recent_games = pd.read_sql_query(team_games_query, conn, params=(team_name,))
+    
+    # 3. NEW: Query to get how ALL TEAMS performed against each opponent
+    opponent_performance_query = """
+    WITH all_games AS (
+        SELECT 
+            t1.game_id,
+            t1.name AS team_name,
+            t2.name AS opponent_name,
+            (t1.p1_score + t1.p2_score + t1.p3_score + t1.p4_score) AS team_score,
+            (t2.p1_score + t2.p2_score + t2.p3_score + t2.p4_score) AS opponent_score,
+            ((t1.p1_score + t1.p2_score + t1.p3_score + t1.p4_score) - 
+             (t2.p1_score + t2.p2_score + t2.p3_score + t2.p4_score)) AS point_diff,
+            t1.field_goal_percentage AS team_fg_pct,
+            t1.turnovers AS team_turnovers,
+            t1.assists AS team_assists
+        FROM Teams t1
+        JOIN Teams t2 ON t1.game_id = t2.game_id AND t1.tm != t2.tm
+    )
+    SELECT 
+        opponent_name,
+        AVG(point_diff) AS avg_point_diff,
+        AVG(team_fg_pct) AS avg_fg_pct,
+        AVG(team_turnovers) AS avg_turnovers,
+        AVG(team_assists) AS avg_assists,
+        COUNT(*) AS games_count
+    FROM all_games
+    GROUP BY opponent_name
+    """
+    
+    # Get how teams typically perform against each opponent
+    typical_vs_opponent = pd.read_sql_query(opponent_performance_query, conn)
+    conn.close()
+    
+    if recent_games.empty:
+        return None
+    
+    # 4. Merge team strength data with recent games to analyze performance vs opponent strength
+    results = {
+        'team_name': team_name,
+        'games_analyzed': len(recent_games),
+        'team_strength': float(team_strengths[team_strengths['team_name'] == team_name]['strength_rating_normalized'].iloc[0]) 
+                         if not team_strengths[team_strengths['team_name'] == team_name].empty else 5.0,
+        'games': []
+    }
+    
+    # Calculate average team performance metrics to use as baseline
+    avg_performance = {
+        'avg_point_diff': recent_games['point_diff'].mean(),
+        'avg_fg_pct': recent_games['team_fg_pct'].mean(),
+        'avg_3pt_pct': recent_games['team_3pt_pct'].mean(),
+        'avg_assists': recent_games['team_assists'].mean(),
+        'avg_rebounds': recent_games['team_rebounds'].mean(),
+        'avg_turnovers': recent_games['team_turnovers'].mean()
+    }
+    results['avg_performance'] = avg_performance
+    
+    # Add opponent strength and compare with typical performance against that opponent
+    for _, game in recent_games.iterrows():
+        opponent_name = game['opponent_name']
+        opponent_strength = float(team_strengths[team_strengths['team_name'] == opponent_name]['strength_rating_normalized'].iloc[0]) \
+                         if not team_strengths[team_strengths['team_name'] == opponent_name].empty else 5.0
+        
+        # Get typical performance of all teams against this opponent
+        opponent_typical = typical_vs_opponent[typical_vs_opponent['opponent_name'] == opponent_name]
+        
+        if not opponent_typical.empty:
+            # Calculate how this performance compares to typical performance against this opponent
+            typical_point_diff = opponent_typical['avg_point_diff'].iloc[0]
+            typical_fg_pct = opponent_typical['avg_fg_pct'].iloc[0]
+            typical_turnovers = opponent_typical['avg_turnovers'].iloc[0]
+            typical_assists = opponent_typical['avg_assists'].iloc[0]
+            
+            # Calculate similarity score (how similar this team's performance was to typical performance)
+            point_diff_similarity = 1 - min(abs(game['point_diff'] - typical_point_diff) / 20, 1)  # Normalize to 0-1
+            fg_pct_similarity = 1 - min(abs(game['team_fg_pct'] - typical_fg_pct) / 20, 1)  # Normalize to 0-1
+            turnover_similarity = 1 - min(abs(game['team_turnovers'] - typical_turnovers) / 10, 1)  # Normalize to 0-1
+            assists_similarity = 1 - min(abs(game['team_assists'] - typical_assists) / 10, 1)  # Normalize to 0-1
+            
+            # Weight the factors (you can adjust these weights based on importance)
+            similarity_score = (
+                0.4 * point_diff_similarity +
+                0.3 * fg_pct_similarity +
+                0.15 * turnover_similarity +
+                0.15 * assists_similarity
+            ) * 10  # Scale to 0-10
+            
+            # Calculate if performance was better or worse than typical
+            # Positive means better than typical, negative means worse
+            performance_vs_typical = game['point_diff'] - typical_point_diff
+        else:
+            # If no data for this opponent, use neutral values
+            similarity_score = 5.0
+            performance_vs_typical = 0.0
+            typical_point_diff = 0.0
+        
+        # Continue with existing performance rating calculation
+        expected_pt_diff = results['team_strength'] - opponent_strength
+        performance_vs_expected = game['point_diff'] - expected_pt_diff
+        
+        # Traditional performance rating as before
+        if expected_pt_diff > 0:  # Team was expected to win
+            if game['point_diff'] > 0:  # Team won as expected
+                if game['point_diff'] > expected_pt_diff:  # Won by more than expected
+                    performance_rating = min(10, 7 + 3 * (performance_vs_expected / 10))
+                else:  # Won by less than expected
+                    performance_rating = max(4, 7 - 3 * abs(performance_vs_expected) / 10)
+            else:  # Team lost despite being expected to win
+                performance_rating = max(1, 4 - 3 * abs(performance_vs_expected) / 15)
+        else:  # Team was expected to lose
+            if game['point_diff'] > 0:  # Team won despite being expected to lose
+                performance_rating = min(10, 7 + 3 * (performance_vs_expected / 5))
+            else:  # Team lost as expected
+                if game['point_diff'] > expected_pt_diff:  # Lost by less than expected
+                    performance_rating = max(4, 7 - 3 * abs(performance_vs_expected) / 15)
+                else:  # Lost by more than expected
+                    performance_rating = max(1, 4 - 3 * abs(performance_vs_expected) / 20)
+        
+        # Store both performance ratings and similarity metrics
+        game_data = {
+            'opponent_name': opponent_name,
+            'opponent_strength': opponent_strength,
+            'score': f"{int(game['team_score'])} - {int(game['opponent_score'])}",
+            'point_diff': int(game['point_diff']),
+            'expected_pt_diff': float(expected_pt_diff),
+            'typical_pt_diff': float(typical_point_diff),
+            'performance_vs_expected': float(performance_vs_expected),
+            'performance_vs_typical': float(performance_vs_typical),
+            'fg_pct': float(game['team_fg_pct']),
+            'performance_rating': float(performance_rating),
+            'similarity_score': float(similarity_score),
+            'game_id': int(game['game_id'])
+        }
+        results['games'].append(game_data)
+    
+    # 5. Calculate performance trends against different opponent strengths
+    strength_tiers = {
+        'strong_opponents': [g for g in results['games'] if g['opponent_strength'] >= 7],
+        'average_opponents': [g for g in results['games'] if 4 <= g['opponent_strength'] < 7],
+        'weak_opponents': [g for g in results['games'] if g['opponent_strength'] < 4]
+    }
+    
+    # Calculate average performance for each tier
+    tier_performance = {}
+    for tier_name, tier_games in strength_tiers.items():
+        if tier_games:
+            avg_performance = {
+                'games_count': len(tier_games),
+                'avg_point_diff': sum(g['point_diff'] for g in tier_games) / len(tier_games),
+                'avg_performance_rating': sum(g['performance_rating'] for g in tier_games) / len(tier_games),
+                'avg_similarity_score': sum(g['similarity_score'] for g in tier_games) / len(tier_games),
+                'win_percentage': sum(1 for g in tier_games if g['point_diff'] > 0) / len(tier_games) * 100
+            }
+            tier_performance[tier_name] = avg_performance
+        else:
+            tier_performance[tier_name] = {'games_count': 0, 'avg_point_diff': 0, 'avg_performance_rating': 0, 'avg_similarity_score': 0, 'win_percentage': 0}
+    
+    results['strength_tier_performance'] = tier_performance
+    
+    # 6. Identify best, worst, most similar, and most unique performances
+    if results['games']:
+        results['best_performance'] = max(results['games'], key=lambda x: x['performance_rating'])
+        results['worst_performance'] = min(results['games'], key=lambda x: x['performance_rating'])
+        results['most_similar_to_typical'] = max(results['games'], key=lambda x: x['similarity_score'])
+        results['most_unique_from_typical'] = min(results['games'], key=lambda x: x['similarity_score'])
+    
+    # 7. Calculate performance trend
+    if len(results['games']) >= 5:
+        recent_5_avg = sum(g['performance_rating'] for g in results['games'][:5]) / 5
+        older_avg = sum(g['performance_rating'] for g in results['games'][5:]) / len(results['games'][5:]) if results['games'][5:] else 0
+        results['trend'] = 'improving' if recent_5_avg > older_avg else 'declining' if recent_5_avg < older_avg else 'stable'
+        results['trend_strength'] = abs(recent_5_avg - older_avg)
+    else:
+        results['trend'] = 'insufficient_data'
+        results['trend_strength'] = 0
+    
+    return results
+
+def display_team_performance_analysis():
+    """Display team performance analysis in Streamlit"""
+    st.title("📊 Team Performance Analysis")
+    
+    # Current date/time and user info
+    st.markdown(f"*Current Date and Time (UTC - YYYY-MM-DD HH:MM:SS formatted): 2025-04-02 16:45:10*")
+    st.markdown(f"*Current User's Login: Dodga010*")
+    
+    # Team selection
+    teams = fetch_teams()
+    
+    if not teams:
+        st.error("No team data available.")
+        return
+    
+    selected_team = st.selectbox("Select Team", teams, index=0)
+    
+    if selected_team:
+        # Run team performance analysis
+        with st.spinner(f"Analyzing performance trends for {selected_team}..."):
+            analysis_results = analyze_team_performance_trends(selected_team)
+        
+        if not analysis_results:
+            st.error(f"No performance data available for {selected_team}.")
+            return
+        
+        # Display team strength overview
+        st.header(f"Team Strength Analysis: {selected_team}")
+        team_strength = analysis_results['team_strength']
+        
+        # Create a gauge chart for team strength
+        fig = go.Figure(go.Indicator(
+            mode="gauge+number",
+            value=team_strength,
+            domain={'x': [0, 1], 'y': [0, 1]},
+            title={'text': "Team Strength Rating (1-10)"},
+            gauge={
+                'axis': {'range': [1, 10]},
+                'bar': {'color': "darkblue"},
+                'steps': [
+                    {'range': [1, 4], 'color': "lightcoral"},
+                    {'range': [4, 7], 'color': "lightyellow"},
+                    {'range': [7, 10], 'color': "lightgreen"}
+                ],
+                'threshold': {
+                    'line': {'color': "red", 'width': 4},
+                    'thickness': 0.75,
+                    'value': team_strength
+                }
+            }
+        ))
+        
+        st.plotly_chart(fig)
+        
+        # Display recent games performance
+        st.subheader("Recent Games Performance")
+        
+        # Create a data table for recent games
+        recent_games_df = pd.DataFrame(analysis_results['games'])
+        
+        # Add win/loss column
+        recent_games_df['Result'] = recent_games_df['point_diff'].apply(lambda x: 'Win' if x > 0 else 'Loss')
+        
+        # Format for display
+        display_df = recent_games_df[['opponent_name', 'score', 'Result', 'opponent_strength', 'performance_rating']].copy()
+        display_df.columns = ['Opponent', 'Score', 'Result', 'Opp. Strength (1-10)', 'Performance Rating (1-10)']
+        
+        # Color code wins and losses
+        st.dataframe(
+            display_df.style
+                .apply(lambda x: ['color: green' if v == 'Win' else 'color: red' for v in x], 
+                      subset=['Result'])
+                .background_gradient(subset=['Performance Rating (1-10)'], cmap='RdYlGn')
+                .background_gradient(subset=['Opp. Strength (1-10)'], cmap='Blues')
+                .format({
+                    'Opp. Strength (1-10)': '{:.1f}',
+                    'Performance Rating (1-10)': '{:.1f}'
+                })
+        )
+        
+        # Performance against different opponent strengths
+        st.subheader("Performance by Opponent Strength")
+        
+        # Create columns for the three tiers
+        col1, col2, col3 = st.columns(3)
+        
+        # Display tier stats
+        tiers = analysis_results['strength_tier_performance']
+        
+        with col1:
+            st.write("### vs Strong Teams")
+            strong_data = tiers['strong_opponents']
+            if strong_data['games_count'] > 0:
+                st.metric("Games Played", strong_data['games_count'])
+                st.metric("Win %", f"{strong_data['win_percentage']:.1f}%")
+                st.metric("Avg Point Diff", f"{strong_data['avg_point_diff']:.1f}")
+                
+                # Rating visualization
+                st.progress(strong_data['avg_performance_rating'] / 10)
+                st.write(f"Performance Rating: {strong_data['avg_performance_rating']:.1f}/10")
+            else:
+                st.write("No games against strong teams")
+        
+        with col2:
+            st.write("### vs Average Teams")
+            avg_data = tiers['average_opponents']
+            if avg_data['games_count'] > 0:
+                st.metric("Games Played", avg_data['games_count'])
+                st.metric("Win %", f"{avg_data['win_percentage']:.1f}%")
+                st.metric("Avg Point Diff", f"{avg_data['avg_point_diff']:.1f}")
+                
+                # Rating visualization
+                st.progress(avg_data['avg_performance_rating'] / 10)
+                st.write(f"Performance Rating: {avg_data['avg_performance_rating']:.1f}/10")
+            else:
+                st.write("No games against average teams")
+        
+        with col3:
+            st.write("### vs Weak Teams")
+            weak_data = tiers['weak_opponents']
+            if weak_data['games_count'] > 0:
+                st.metric("Games Played", weak_data['games_count'])
+                st.metric("Win %", f"{weak_data['win_percentage']:.1f}%")
+                st.metric("Avg Point Diff", f"{weak_data['avg_point_diff']:.1f}")
+                
+                # Rating visualization
+                st.progress(weak_data['avg_performance_rating'] / 10)
+                st.write(f"Performance Rating: {weak_data['avg_performance_rating']:.1f}/10")
+            else:
+                st.write("No games against weak teams")
+        
+        # Performance trend
+        st.subheader("Performance Trend")
+        
+        if analysis_results['trend'] != 'insufficient_data':
+            trend_text = {
+                'improving': "Improving 📈",
+                'declining': "Declining 📉",
+                'stable': "Stable ↔️"
+            }
+            
+            trend_strength = analysis_results['trend_strength']
+            if trend_strength > 1.5:
+                trend_desc = "strongly"
+            elif trend_strength > 0.7:
+                trend_desc = "moderately"
+            else:
+                trend_desc = "slightly"
+            
+            st.info(f"{selected_team} is {trend_desc} {trend_text[analysis_results['trend']]} over the last 5 games compared to earlier games.")
+            
+            # Create trend visualization
+            if len(analysis_results['games']) >= 5:
+                # Extract performance ratings in chronological order (reverse since newest are first)
+                ratings = [g['performance_rating'] for g in analysis_results['games']]
+                ratings.reverse()  # Now oldest game first
+                
+                game_numbers = list(range(1, len(ratings) + 1))
+                
+                trend_df = pd.DataFrame({
+                    'Game Number': game_numbers,
+                    'Performance Rating': ratings
+                })
+                
+                fig = px.line(
+                    trend_df, 
+                    x='Game Number', 
+                    y='Performance Rating',
+                    title=f"{selected_team} Performance Trend",
+                    markers=True,
+                    range_y=[1, 10]
+                )
+                
+                # Add a reference line for average performance
+                fig.add_hline(
+                    y=5, 
+                    line_dash="dash", 
+                    line_color="gray",
+                    annotation_text="Average Performance",
+                    annotation_position="bottom right"
+                )
+                
+                st.plotly_chart(fig)
+        else:
+            st.warning("Insufficient data to determine performance trend. Need at least 5 games.")
+        
+        # Best and worst performances
+        if 'best_performance' in analysis_results and 'worst_performance' in analysis_results:
+            st.subheader("Best & Worst Performances")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                best = analysis_results['best_performance']
+                st.write("### 🌟 Best Performance")
+                st.write(f"**Opponent:** {best['opponent_name']} (Strength: {best['opponent_strength']:.1f}/10)")
+                st.write(f"**Score:** {best['score']}")
+                st.write(f"**Performance Rating:** {best['performance_rating']:.1f}/10")
+                st.write(f"**Field Goal %:** {best['fg_pct']:.1f}%")
+                
+                if best['point_diff'] > best['expected_pt_diff']:
+                    st.success(f"Performed {abs(best['performance_vs_expected']):.1f} points better than expected")
+            
+            with col2:
+                worst = analysis_results['worst_performance']
+                st.write("### 👎 Worst Performance")
+                st.write(f"**Opponent:** {worst['opponent_name']} (Strength: {worst['opponent_strength']:.1f}/10)")
+                st.write(f"**Score:** {worst['score']}")
+                st.write(f"**Performance Rating:** {worst['performance_rating']:.1f}/10")
+                st.write(f"**Field Goal %:** {worst['fg_pct']:.1f}%")
+                
+                if worst['point_diff'] < worst['expected_pt_diff']:
+                    st.error(f"Performed {abs(worst['performance_vs_expected']):.1f} points worse than expected")
+        
+        # Display recommendations and insights
+        st.subheader("📝 Performance Insights")
+        
+        # Generate insights based on analysis
+        insights = []
+        
+        # Overall team strength insight
+        if team_strength >= 7:
+            insights.append(f"**Strong Team Rating**: {selected_team} rates as one of the stronger teams with a {team_strength:.1f}/10 rating.")
+        elif team_strength <= 4:
+            insights.append(f"**Improvement Needed**: {selected_team} currently rates below average with a {team_strength:.1f}/10 rating.")
+        else:
+            insights.append(f"**Average Team Rating**: {selected_team} rates as an average team with a {team_strength:.1f}/10 rating.")
+        
+        # Performance against different tiers
+        strong_perf = tiers['strong_opponents']['avg_performance_rating'] if tiers['strong_opponents']['games_count'] > 0 else 0
+        weak_perf = tiers['weak_opponents']['avg_performance_rating'] if tiers['weak_opponents']['games_count'] > 0 else 0
+        
+        if strong_perf > 6 and tiers['strong_opponents']['games_count'] > 1:
+            insights.append(f"**Strong Against Top Competition**: {selected_team} performs well against strong opponents ({strong_perf:.1f}/10 rating).")
+        
+        if weak_perf < 5 and tiers['weak_opponents']['games_count'] > 1:
+            insights.append(f"**Struggles Against Weaker Teams**: {selected_team} underperforms against weaker opponents ({weak_perf:.1f}/10 rating).")
+        
+        if analysis_results['trend'] == 'improving' and analysis_results['trend_strength'] > 1.0:
+            insights.append(f"**Strong Upward Trajectory**: {selected_team} is showing significant improvement in recent games.")
+        elif analysis_results['trend'] == 'declining' and analysis_results['trend_strength'] > 1.0:
+            insights.append(f"**Concerning Downward Trend**: {selected_team} is showing a significant decline in performance recently.")
+        
+        # Display insights
+        for insight in insights:
+            st.write(insight)
+        # Add this section to the display_team_performance_analysis function
+        st.subheader("📊 Similarity Analysis")
+        st.write("This analysis shows how similarly this team performed compared to how other teams typically perform against the same opponents.")
+
+        # Create a dataframe for similarity analysis
+        similarity_df = pd.DataFrame([
+            {
+                'Opponent': game['opponent_name'],
+                'Score': game['score'],
+                'Similarity Score (1-10)': round(game['similarity_score'], 1),
+                'Performance vs Typical': round(game['performance_vs_typical'], 1)
+            } for game in analysis_results['games']
+        ])
+
+        # Display similarity table
+        st.dataframe(
+            similarity_df.style
+                .background_gradient(subset=['Similarity Score (1-10)'], cmap='Blues')
+                .background_gradient(subset=['Performance vs Typical'], cmap='RdYlGn')
+        )
+
+        # Show most similar and most unique games
+        col1, col2 = st.columns(2)
+
+        with col1:
+            most_similar = analysis_results['most_similar_to_typical']
+            st.write("### ✓ Most Typical Performance")
+            st.write(f"**Opponent:** {most_similar['opponent_name']}")
+            st.write(f"**Score:** {most_similar['score']}")
+            st.write(f"**Similarity Score:** {most_similar['similarity_score']:.1f}/10")
+            st.write(f"**Compared to typical:** {'+' if most_similar['performance_vs_typical'] > 0 else ''}{most_similar['performance_vs_typical']:.1f} points")
+
+        with col2:
+            most_unique = analysis_results['most_unique_from_typical']
+            st.write("### ⚡ Most Unique Performance")
+            st.write(f"**Opponent:** {most_unique['opponent_name']}")
+            st.write(f"**Score:** {most_unique['score']}")
+            st.write(f"**Similarity Score:** {most_unique['similarity_score']:.1f}/10")
+            st.write(f"**Compared to typical:** {'+' if most_unique['performance_vs_typical'] > 0 else ''}{most_unique['performance_vs_typical']:.1f} points")
+
+        # Add insights about similarity
+        st.subheader("🔍 Similarity Insights")
+
+        avg_similarity = sum(game['similarity_score'] for game in analysis_results['games']) / len(analysis_results['games'])
+        st.write(f"**Overall Similarity Rating:** {avg_similarity:.1f}/10")
+
+        if avg_similarity > 7:
+            st.write(f"✅ **Predictable Performance:** {selected_team} typically performs similarly to how other teams perform against the same opponents.")
+        elif avg_similarity < 4:
+            st.write(f"⚠️ **Unique Style:** {selected_team} often performs quite differently than how other teams typically perform against the same opponents.")
+        else:
+            st.write(f"📊 **Mixed Similarity:** {selected_team} sometimes performs like other teams against certain opponents, but has unique performances in other games.")
+
+        # Show games where team performed significantly better than typical
+        better_than_typical = [g for g in analysis_results['games'] if g['performance_vs_typical'] > 5]
+        if better_than_typical:
+            st.write("### 🔼 Games with Significantly Better Than Typical Performance")
+            for game in better_than_typical:
+                st.write(f"• vs {game['opponent_name']}: {game['performance_vs_typical']:.1f} points better than typical ({game['score']})")
+
+        # Show games where team performed significantly worse than typical
+        worse_than_typical = [g for g in analysis_results['games'] if g['performance_vs_typical'] < -5]
+        if worse_than_typical:
+            st.write("### 🔽 Games with Significantly Worse Than Typical Performance")
+            for game in worse_than_typical:
+                st.write(f"• vs {game['opponent_name']}: {game['performance_vs_typical']:.1f} points worse than typical ({game['score']})")
 def main():
     st.title("🏀 Basketball Stats Viewer")
     page = st.sidebar.selectbox("📌 Choose a page", ["Team Season Boxscore", "Shot Chart","Match report", "Four Factors", "Lebron", "Play by Play", "Match Detail", "Five Player Segments", "Team Lineup Analysis"])
@@ -7935,7 +8513,7 @@ def main():
 
             display_avg_substitutions_graph()
             display_team_rating_analysis()
-
+            display_team_performance_analysis()
     elif page == "Head-to-Head Comparison":
         df = fetch_team_data()
         if df.empty:

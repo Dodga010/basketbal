@@ -8607,7 +8607,7 @@ def main():
     elif page == "Five Player Segments":
         display_five_player_segments()
     # ... rest of your main function ...
-    elif page == "Five Player Segments":
+    elif page == "Shooting Foul Analysis":
         display_shooting_fouls_analysis()
     elif page == "Team Lineup Analysis":
         display_team_analysis()

@@ -8685,17 +8685,22 @@ def fetch_player_fouls_and_minutes():
     
     # Query to count fouls on each player
     fouls_query = """
-    SELECT p.first_name || ' ' || p.last_name AS player_name, COUNT(*) AS fouls_count
+    SELECT p.first_name || ' ' || p.last_name AS player_name, COUNT(*) AS fouls_count,
+           t.name as team_name
     FROM PlayByPlay pbp
     JOIN Players p ON pbp.player_id = p.json_player_id AND pbp.game_id = p.game_id
+    JOIN Teams t ON p.team_id = t.tm AND p.game_id = t.game_id
     WHERE pbp.action_type = 'foulon'
-    GROUP BY player_name
+    GROUP BY player_name, team_name
     """
     
     # Query to sum minutes played by each player
+    # Fixed the ambiguous column error by specifying p.game_id
     minutes_query = """
-    SELECT first_name || ' ' || last_name AS player_name, minutes_played, game_id
-    FROM Players
+    SELECT first_name || ' ' || last_name AS player_name, minutes_played, p.game_id,
+           t.name as team_name
+    FROM Players p
+    JOIN Teams t ON p.team_id = t.tm AND p.game_id = t.game_id
     """
     
     # Execute queries
@@ -8716,13 +8721,21 @@ def fetch_player_fouls_and_minutes():
     minutes_df['minutes_decimal'] = minutes_df['minutes_played'].apply(convert_minutes)
     
     # Sum minutes by player across all games
-    total_minutes = minutes_df.groupby('player_name')['minutes_decimal'].sum().reset_index()
+    total_minutes = minutes_df.groupby(['player_name', 'team_name'])['minutes_decimal'].sum().reset_index()
     
     # Merge fouls and minutes data
-    result = pd.merge(fouls_df, total_minutes, on='player_name', how='outer')
+    result = pd.merge(fouls_df, total_minutes, on=['player_name', 'team_name'], how='outer')
     result.fillna({'fouls_count': 0, 'minutes_decimal': 0}, inplace=True)
     
     return result
+
+def fetch_teams():
+    """Fetch all team names from the database"""
+    conn = sqlite3.connect(db_path)
+    query = "SELECT DISTINCT name FROM Teams ORDER BY name"
+    teams = pd.read_sql_query(query, conn)
+    conn.close()
+    return teams['name'].tolist()
 
 def display_player_fouls_analysis():
     """Display visualization of fouls vs minutes played"""
@@ -8732,28 +8745,42 @@ def display_player_fouls_analysis():
     # Fetch data
     data = fetch_player_fouls_and_minutes()
     
+    # Create team dropdown
+    teams = fetch_teams()
+    selected_team = st.selectbox("Select a team to view all its players:", [""] + teams)
+    
     # Create player dropdown
     all_players = sorted(data['player_name'].unique())
-    selected_players = st.multiselect("Select players to display:", all_players)
+    
+    # If a team is selected, get all players from that team
+    team_players = []
+    if selected_team:
+        team_players = data[data['team_name'] == selected_team]['player_name'].unique().tolist()
+    
+    # Use the team's players as default if a team is selected, otherwise empty list
+    default_selection = team_players if selected_team else []
+    
+    # Allow user to modify the selection
+    selected_players = st.multiselect("Select players to display:", all_players, default=default_selection)
     
     if selected_players:
         # Filter data
         filtered_data = data[data['player_name'].isin(selected_players)]
         
-        # Create scatter plot
+        # Create scatter plot with inverted axes (minutes on x-axis, fouls on y-axis)
         fig, ax = plt.subplots(figsize=(10, 6))
-        scatter = ax.scatter(filtered_data['fouls_count'], filtered_data['minutes_decimal'])
+        scatter = ax.scatter(filtered_data['minutes_decimal'], filtered_data['fouls_count'])
         
         # Add labels for each point
         for _, row in filtered_data.iterrows():
             ax.annotate(row['player_name'], 
-                        (row['fouls_count'], row['minutes_decimal']),
+                        (row['minutes_decimal'], row['fouls_count']),
                         xytext=(5, 5), 
                         textcoords='offset points')
         
-        ax.set_xlabel('Number of Fouls Committed on Player')
-        ax.set_ylabel('Total Minutes Played')
-        ax.set_title('Fouls Committed on Players vs Minutes Played')
+        ax.set_xlabel('Total Minutes Played')
+        ax.set_ylabel('Number of Fouls Committed on Player')
+        ax.set_title('Minutes Played vs Fouls Committed on Players')
         ax.grid(True)
         
         # Show plot
@@ -8761,12 +8788,11 @@ def display_player_fouls_analysis():
         
         # Show data table
         st.subheader("Selected Player Data")
-        display_df = filtered_data[['player_name', 'fouls_count', 'minutes_decimal']].copy()
-        display_df.columns = ['Player', 'Fouls On Player', 'Minutes Played']
+        display_df = filtered_data[['player_name', 'team_name', 'minutes_decimal', 'fouls_count']].copy()
+        display_df.columns = ['Player', 'Team', 'Minutes Played', 'Fouls On Player']
         st.dataframe(display_df)
     else:
         st.info("Please select one or more players to display the analysis")
-
 def main():
     st.title("🏀 Basketball Stats Viewer")
     page = st.sidebar.selectbox("📌 Choose a page", ["Team Season Boxscore", "Shot Chart","Match report", "Four Factors", "Lebron", "Play by Play", "Match Detail", "Five Player Segments", "Team Lineup Analysis", "Shooting Foul Analysis"])

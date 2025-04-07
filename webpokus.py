@@ -15,7 +15,6 @@ from datetime import datetime
 import os
 from collections import defaultdict
 from itertools import combinations
-from shooting_fouls_analysis import display_shooting_fouls_analysis
 
 # ✅ Define SQLite database path (works locally & online)
 db_path = os.path.join(os.path.dirname(__file__), "database.db")

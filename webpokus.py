@@ -15,6 +15,7 @@ from datetime import datetime
 import os
 from collections import defaultdict
 from itertools import combinations
+from shooting_fouls_analysis import display_shooting_fouls_analysis
 
 # ✅ Define SQLite database path (works locally & online)
 db_path = os.path.join(os.path.dirname(__file__), "database.db")
@@ -8396,6 +8397,44 @@ def display_team_performance_analysis():
             st.write("### 🔽 Games with Significantly Worse Than Typical Performance")
             for game in worse_than_typical:
                 st.write(f"• vs {game['opponent_name']}: {game['performance_vs_typical']:.1f} points worse than typical ({game['score']})")
+def fetch_players():
+    """Fetch player names from the Shots table as in the original application"""
+    db_path = os.path.join(os.path.dirname(__file__), "database.db")
+    
+    if not os.path.exists(db_path):
+        return []
+
+    conn = sqlite3.connect(db_path)
+    query = "SELECT DISTINCT player_name FROM Shots ORDER BY player_name;"
+    players = pd.read_sql_query(query, conn)["player_name"].tolist()
+    conn.close()
+    return players
+
+def fetch_teams():
+    """Fetch team names from the Teams table"""
+    db_path = os.path.join(os.path.dirname(__file__), "database.db")
+    
+    if not os.path.exists(db_path):
+        return []
+        
+    conn = sqlite3.connect(db_path)
+    query = "SELECT DISTINCT name FROM Teams ORDER BY name;"
+    teams = pd.read_sql_query(query, conn)["name"].tolist()
+    conn.close()
+    return teams
+
+def fetch_shot_types():
+    """Fetch available shot types from the Shots table"""
+    db_path = os.path.join(os.path.dirname(__file__), "database.db")
+    
+    if not os.path.exists(db_path):
+        return []
+        
+    conn = sqlite3.connect(db_path)
+    query = "SELECT DISTINCT shot_sub_type FROM Shots WHERE shot_sub_type IS NOT NULL;"
+    shot_types = pd.read_sql_query(query, conn)["shot_sub_type"].tolist()
+    conn.close()
+    return shot_types
 
 def fetch_shooting_fouls_per_shot_type(player_name=None, team_name=None):
     """
@@ -8418,7 +8457,7 @@ def fetch_shooting_fouls_per_shot_type(player_name=None, team_name=None):
         SUM(CASE WHEN EXISTS (
             SELECT 1 FROM PlayByPlay p 
             WHERE p.game_id = s.game_id 
-            AND p.action_number = s.action_number
+            AND p.action_number BETWEEN s.action_number AND s.action_number + 1
             AND p.action_type = 'foul'
             AND p.sub_type = 'shooting'
         ) THEN 1 ELSE 0 END) AS shooting_fouls_count
@@ -8430,9 +8469,15 @@ def fetch_shooting_fouls_per_shot_type(player_name=None, team_name=None):
         query += f" WHERE s.player_name = '{player_name}'"
     elif team_name:
         query += f"""
-        JOIN Teams t ON s.team_id = t.team_id AND s.game_id = t.game_id
+        JOIN Teams t ON s.team_id = t.tm AND s.game_id = t.game_id
         WHERE t.name = '{team_name}'
         """
+    
+    # Only include shots with valid shot_sub_type
+    if player_name:
+        query += " AND s.shot_sub_type IS NOT NULL"
+    else:
+        query += " WHERE s.shot_sub_type IS NOT NULL"
     
     # Group by shot type
     query += " GROUP BY s.shot_sub_type"
@@ -8440,8 +8485,9 @@ def fetch_shooting_fouls_per_shot_type(player_name=None, team_name=None):
     df = pd.read_sql_query(query, conn)
     conn.close()
     
-    # Calculate fouls per shot
-    df['fouls_per_shot'] = df['shooting_fouls_count'] / df['total_shots']
+    if not df.empty:
+        # Calculate fouls per shot
+        df['fouls_per_shot'] = df['shooting_fouls_count'] / df['total_shots']
     
     return df
 
@@ -8479,39 +8525,48 @@ def display_shooting_fouls_analysis():
     # Choose between team or player analysis
     analysis_type = st.sidebar.radio("Select Analysis Type:", ["Team", "Player"])
     
-    # Get list of teams and players
-    conn = sqlite3.connect(os.path.join(os.path.dirname(__file__), "database.db"))
-    teams_df = pd.read_sql_query("SELECT DISTINCT name FROM Teams", conn)
-    players_df = pd.read_sql_query("SELECT DISTINCT player_name FROM Players", conn)
-    shot_types_df = pd.read_sql_query("SELECT DISTINCT shot_sub_type FROM Shots", conn)
-    conn.close()
+    # Get list of teams and players using the existing functions
+    teams = fetch_teams()
+    players = fetch_players()
+    shot_types = fetch_shot_types()
     
     # Create selection dropdowns based on analysis type
     if analysis_type == "Team":
-        selected_team = st.sidebar.selectbox("Select Team:", teams_df['name'].tolist())
-        selected_player = None
-        title_prefix = f"Team: {selected_team}"
+        if teams:
+            selected_team = st.sidebar.selectbox("Select Team:", teams)
+            selected_player = None
+            title_prefix = f"Team: {selected_team}"
+        else:
+            st.error("No teams found in the database.")
+            return
     else:  # Player analysis
-        selected_player = st.sidebar.selectbox("Select Player:", players_df['player_name'].tolist())
-        selected_team = None
-        title_prefix = f"Player: {selected_player}"
+        if players:
+            selected_player = st.sidebar.selectbox("Select Player:", players)
+            selected_team = None
+            title_prefix = f"Player: {selected_player}"
+        else:
+            st.error("No players found in the database.")
+            return
     
     # Shot type filter
-    available_shot_types = shot_types_df['shot_sub_type'].tolist()
-    shot_filter_type = st.sidebar.radio("Shot Types to Display:", ["All Shot Types", "Selected Shot Types"])
-    
-    if shot_filter_type == "Selected Shot Types":
-        selected_shot_types = st.sidebar.multiselect("Select Shot Types:", 
-                                                     options=available_shot_types,
-                                                     default=available_shot_types[:3])
+    if shot_types:
+        shot_filter_type = st.sidebar.radio("Shot Types to Display:", ["All Shot Types", "Selected Shot Types"])
+        
+        if shot_filter_type == "Selected Shot Types":
+            selected_shot_types = st.sidebar.multiselect("Select Shot Types:", 
+                                                        options=shot_types,
+                                                        default=shot_types[:min(3, len(shot_types))])
+        else:
+            selected_shot_types = shot_types
     else:
-        selected_shot_types = available_shot_types
+        st.warning("No shot types found in the database.")
+        selected_shot_types = []
     
     # Fetch data based on selections
     df = fetch_shooting_fouls_per_shot_type(player_name=selected_player, team_name=selected_team)
     
     # Filter data by selected shot types
-    if shot_filter_type == "Selected Shot Types":
+    if shot_filter_type == "Selected Shot Types" and selected_shot_types:
         df = df[df['shot_sub_type'].isin(selected_shot_types)]
     
     # Generate and display visualization
@@ -8520,25 +8575,41 @@ def display_shooting_fouls_analysis():
         
         # Display the raw data as a table
         st.write("Data Summary:")
-        st.dataframe(df)
+        
+        # Format the dataframe for better display
+        display_df = df.copy()
+        display_df['foul_rate_percentage'] = (display_df['fouls_per_shot'] * 100).round(2).astype(str) + '%'
+        display_df = display_df.rename(columns={
+            'shot_sub_type': 'Shot Type',
+            'total_shots': 'Total Shots',
+            'shooting_fouls_count': 'Shooting Fouls',
+            'fouls_per_shot': 'Fouls per Shot',
+            'foul_rate_percentage': 'Foul Rate'
+        })
+        
+        st.dataframe(display_df)
         
         # Create and display the chart
         fig = plot_shooting_fouls_chart(df, title=f"Shooting Fouls per Shot Type - {title_prefix}")
         st.pyplot(fig)
         
         # Additional insights
-        max_foul_type = df.loc[df['fouls_per_shot'].idxmax()]
-        st.write(f"**Key Insight:** The shot type with highest foul rate is "
-                f"**{max_foul_type['shot_sub_type']}** with "
-                f"**{max_foul_type['fouls_per_shot']:.3f}** fouls per shot.")
-        
-        # Show total fouls drawn
-        total_fouls = df['shooting_fouls_count'].sum()
-        total_shots = df['total_shots'].sum()
-        st.write(f"**Total Stats:** {total_fouls} shooting fouls drawn on {total_shots} shots "
-                f"({total_fouls/total_shots:.3f} fouls per shot overall)")
+        if len(df) > 0:
+            max_foul_type = df.loc[df['fouls_per_shot'].idxmax()]
+            st.write(f"**Key Insight:** The shot type with highest foul rate is "
+                    f"**{max_foul_type['shot_sub_type']}** with "
+                    f"**{max_foul_type['fouls_per_shot']:.3f}** fouls per shot "
+                    f"({max_foul_type['fouls_per_shot']*100:.1f}%).")
+            
+            # Show total fouls drawn
+            total_fouls = df['shooting_fouls_count'].sum()
+            total_shots = df['total_shots'].sum()
+            st.write(f"**Total Stats:** {total_fouls} shooting fouls drawn on {total_shots} shots "
+                    f"({total_fouls/total_shots:.3f} fouls per shot overall, "
+                    f"{total_fouls/total_shots*100:.1f}%)")
     else:
         st.warning("No data available for the selected filters.")
+
 
 def main():
     st.title("🏀 Basketball Stats Viewer")

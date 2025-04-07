@@ -8343,21 +8343,41 @@ import seaborn as sns
 import numpy as np
 from matplotlib.ticker import MaxNLocator
 
-def fetch_shooting_fouls_data(entity_type='player'):
+def fetch_shot_types():
+    """Fetch available shot types from the Shots table"""
+    db_path = os.path.join(os.path.dirname(__file__), "database.db")
+    
+    if not os.path.exists(db_path):
+        return []
+        
+    conn = sqlite3.connect(db_path)
+    query = "SELECT DISTINCT shot_sub_type FROM Shots WHERE shot_sub_type IS NOT NULL ORDER BY shot_sub_type;"
+    shot_types = pd.read_sql_query(query, conn)["shot_sub_type"].tolist()
+    conn.close()
+    return shot_types
+
+def fetch_shooting_fouls_data(entity_type='player', selected_shot_types=None):
     """
-    Fetch data about shooting fouls for all players or teams.
+    Fetch data about shooting fouls for all players or teams, filtered by shot types.
     
     Parameters:
     - entity_type: 'player' or 'team' to determine grouping
+    - selected_shot_types: List of shot types to include (None for all)
     
     Returns pandas DataFrame with total shots and fouls by player/team
     """
     db_path = os.path.join(os.path.dirname(__file__), "database.db")
     conn = sqlite3.connect(db_path)
     
+    # Shot type filter condition
+    shot_type_condition = ""
+    if selected_shot_types:
+        shot_types_str = "', '".join(selected_shot_types)
+        shot_type_condition = f"AND s.shot_sub_type IN ('{shot_types_str}')"
+    
     if entity_type == 'player':
         # Query to get shots and fouls by player
-        query = """
+        query = f"""
         SELECT 
             s.player_name AS entity_name,
             COUNT(DISTINCT s.shot_id) AS total_shots,
@@ -8375,12 +8395,13 @@ def fetch_shooting_fouls_data(entity_type='player'):
             ) THEN 1 ELSE 0 END) AS shooting_fouls_count
         FROM Shots s
         WHERE s.player_name IS NOT NULL
+        {shot_type_condition}
         GROUP BY s.player_name
         HAVING total_shots >= 10  -- Filter out players with too few shots for meaningful analysis
         """
     else:  # team
         # Query to get shots and fouls by team
-        query = """
+        query = f"""
         SELECT 
             t.name AS entity_name,
             COUNT(DISTINCT s.shot_id) AS total_shots,
@@ -8398,6 +8419,7 @@ def fetch_shooting_fouls_data(entity_type='player'):
             ) THEN 1 ELSE 0 END) AS shooting_fouls_count
         FROM Shots s
         JOIN Teams t ON s.team_id = t.tm AND s.game_id = t.game_id
+        WHERE 1=1 {shot_type_condition}
         GROUP BY t.name
         """
     
@@ -8411,7 +8433,7 @@ def fetch_shooting_fouls_data(entity_type='player'):
     
     return df
 
-def create_scatter_plot(df, entity_type='player'):
+def create_scatter_plot(df, entity_type='player', shot_types_label="selected shot types"):
     """
     Create a scatter plot showing shooting fouls vs shot attempts
     """
@@ -8451,7 +8473,7 @@ def create_scatter_plot(df, entity_type='player'):
     
     # Set labels and title
     entity_label = "Players" if entity_type == 'player' else "Teams"
-    ax.set_xlabel(f'Total Shot Attempts', fontsize=12)
+    ax.set_xlabel(f'Total Shot Attempts ({shot_types_label})', fontsize=12)
     ax.set_ylabel('Shooting Fouls Drawn', fontsize=12)
     ax.set_title(f'Shooting Fouls vs Shot Attempts by {entity_label}', fontsize=14)
     
@@ -8460,7 +8482,7 @@ def create_scatter_plot(df, entity_type='player'):
     
     # Add a reference line showing average foul rate
     avg_foul_rate = df['shooting_fouls_count'].sum() / df['total_shots'].sum()
-    x_range = [df['total_shots'].min(), df['total_shots'].max()]
+    x_range = [0, df['total_shots'].max() * 1.05]
     y_values = [x * avg_foul_rate for x in x_range]
     ax.plot(x_range, y_values, 'r--', alpha=0.7, label=f'Avg Foul Rate: {avg_foul_rate:.3f}')
     
@@ -8484,8 +8506,27 @@ def display_shooting_fouls_analysis():
     entity_type = st.sidebar.radio("Select Analysis Type:", ["Players", "Teams"])
     entity_type_value = 'player' if entity_type == "Players" else 'team'
     
+    # Get shot types for filtering
+    all_shot_types = fetch_shot_types()
+    
+    # Shot type filter
+    st.sidebar.subheader("Shot Type Filter")
+    shot_filter_option = st.sidebar.radio("Shot Types to Include:", ["All Shot Types", "Selected Shot Types"])
+    
+    selected_shot_types = None
+    shot_types_label = "all shot types"
+    
+    if shot_filter_option == "Selected Shot Types" and all_shot_types:
+        selected_shot_types = st.sidebar.multiselect(
+            "Select Shot Types:", 
+            options=all_shot_types,
+            default=all_shot_types[:min(3, len(all_shot_types))]
+        )
+        if selected_shot_types:
+            shot_types_label = ", ".join(selected_shot_types)
+    
     # Fetch data based on selections
-    df = fetch_shooting_fouls_data(entity_type=entity_type_value)
+    df = fetch_shooting_fouls_data(entity_type=entity_type_value, selected_shot_types=selected_shot_types)
     
     if not df.empty:
         # Summary statistics
@@ -8496,7 +8537,7 @@ def display_shooting_fouls_analysis():
         # Create metrics at the top
         col1, col2, col3 = st.columns(3)
         with col1:
-            st.metric(f"Total Shots ({entity_type})", f"{total_shots:,}")
+            st.metric(f"Total Shots ({shot_filter_option.lower()})", f"{total_shots:,}")
         with col2:
             st.metric("Total Shooting Fouls", f"{total_fouls:,}")
         with col3:
@@ -8505,14 +8546,14 @@ def display_shooting_fouls_analysis():
         # Create and display the scatter plot
         st.subheader(f"Shooting Fouls vs Shot Attempts by {entity_type}")
         
-        fig = create_scatter_plot(df, entity_type_value)
+        fig = create_scatter_plot(df, entity_type_value, shot_types_label)
         st.pyplot(fig)
         
         # Add explanation of the visualization
         st.info("""
         **How to read this chart:**
         - Each dot represents a single player or team
-        - X-axis shows the total number of shot attempts
+        - X-axis shows the total number of shot attempts (based on selected shot types)
         - Y-axis shows the total number of shooting fouls drawn
         - The size and color of each dot represent the foul drawing rate (fouls per shot)
         - The dashed red line shows the average foul rate across all data
@@ -8571,7 +8612,7 @@ def display_shooting_fouls_analysis():
                     f"**{top_shots['total_shots']}** shots but drawing only {top_shots['shooting_fouls_count']} fouls "
                     f"({top_shots['fouls_per_shot']:.3f} per shot).")
     else:
-        st.warning("No data available for analysis. Please ensure your database contains valid shot and foul records.")
+        st.warning("No data available for analysis. Please ensure your database contains valid shot and foul records or try different shot types.")
 
 # To integrate with your main application, add this function to the main menu options
 

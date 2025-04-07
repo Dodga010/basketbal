@@ -8678,6 +8678,7 @@ import numpy as np
 import streamlit as st
 import os
 import json
+from scipy.stats import pearsonr
 
 db_path = os.path.join(os.path.dirname(__file__), "database.db")
 
@@ -8719,9 +8720,21 @@ def fetch_player_fouls_and_minutes(shooting_fouls_only=False):
     JOIN Teams t ON p.team_id = t.tm AND p.game_id = t.game_id
     """
     
+    # Query to count fouls committed BY each player
+    fouls_by_player_query = """
+    SELECT p.first_name || ' ' || p.last_name AS player_name, COUNT(*) AS fouls_committed,
+           t.name as team_name
+    FROM PlayByPlay pbp
+    JOIN Players p ON pbp.player_id = p.json_player_id AND pbp.game_id = p.game_id
+    JOIN Teams t ON p.team_id = t.tm AND p.game_id = t.game_id
+    WHERE pbp.action_type = 'foul'
+    GROUP BY player_name, team_name
+    """
+    
     # Execute queries
     fouls_df = pd.read_sql_query(fouls_query, conn)
     minutes_df = pd.read_sql_query(minutes_query, conn)
+    fouls_by_player_df = pd.read_sql_query(fouls_by_player_query, conn)
     
     conn.close()
     
@@ -8743,10 +8756,21 @@ def fetch_player_fouls_and_minutes(shooting_fouls_only=False):
     result = pd.merge(fouls_df, total_minutes, on=['player_name', 'team_name'], how='outer')
     result.fillna({'fouls_count': 0, 'minutes_decimal': 0}, inplace=True)
     
-    # Calculate fouls per 40 minutes
+    # Add fouls committed BY player
+    result = pd.merge(result, fouls_by_player_df, on=['player_name', 'team_name'], how='left')
+    result.fillna({'fouls_committed': 0}, inplace=True)
+    
+    # Calculate fouls per 40 minutes (fouls received)
     result['fouls_per_40'] = np.where(
         result['minutes_decimal'] > 0,
         (result['fouls_count'] / result['minutes_decimal']) * 40,
+        0
+    )
+    
+    # Calculate fouls committed per 40 minutes
+    result['fouls_committed_per_40'] = np.where(
+        result['minutes_decimal'] > 0,
+        (result['fouls_committed'] / result['minutes_decimal']) * 40,
         0
     )
     
@@ -8759,6 +8783,55 @@ def fetch_teams():
     teams = pd.read_sql_query(query, conn)
     conn.close()
     return teams['name'].tolist()
+
+def calculate_foul_correlation(data):
+    """Calculate correlation between fouls committed and fouls received"""
+    # Filter to players with sufficient minutes
+    valid_data = data[data['minutes_decimal'] >= 10]  # Minimum 10 minutes to be included
+    
+    if len(valid_data) < 5:
+        return None, 0, 0  # Not enough data points for meaningful correlation
+    
+    # Calculate correlation coefficient
+    correlation, p_value = pearsonr(valid_data['fouls_committed_per_40'], valid_data['fouls_per_40'])
+    
+    return correlation, p_value, len(valid_data)
+
+def plot_foul_correlation(data, title_prefix=""):
+    """Create a scatter plot showing relationship between fouls committed and received"""
+    valid_data = data[data['minutes_decimal'] >= 10]
+    
+    if len(valid_data) < 5:
+        return None, "Not enough data for correlation analysis (need at least 5 players with 10+ minutes)"
+    
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    # Create scatter plot
+    scatter = ax.scatter(valid_data['fouls_committed_per_40'], valid_data['fouls_per_40'])
+    
+    # Add player labels
+    for _, row in valid_data.iterrows():
+        ax.annotate(row['player_name'], 
+                   (row['fouls_committed_per_40'], row['fouls_per_40']),
+                   xytext=(5, 5), 
+                   textcoords='offset points',
+                   fontsize=8)
+    
+    # Add trend line
+    z = np.polyfit(valid_data['fouls_committed_per_40'], valid_data['fouls_per_40'], 1)
+    p = np.poly1d(z)
+    ax.plot(valid_data['fouls_committed_per_40'], p(valid_data['fouls_committed_per_40']), 
+            "r--", alpha=0.8, label=f"Trend line: y = {z[0]:.2f}x + {z[1]:.2f}")
+    
+    # Calculate and display correlation
+    corr, p_value, n = calculate_foul_correlation(valid_data)
+    ax.set_xlabel('Fouls Committed per 40 Minutes')
+    ax.set_ylabel('Fouls Received per 40 Minutes')
+    ax.set_title(f'{title_prefix}Correlation between Fouls Committed and Received\n(r = {corr:.3f}, p = {p_value:.3f}, n = {n})')
+    ax.grid(True)
+    ax.legend()
+    
+    return fig, None
 
 def display_player_fouls_analysis():
     """Display visualization of fouls vs minutes played"""
@@ -8789,12 +8862,17 @@ def display_player_fouls_analysis():
     # Allow user to modify the selection
     selected_players = st.multiselect("Select players to display:", all_players, default=default_selection)
     
+    # Show foul correlation option
+    show_correlation = st.checkbox("Show Correlation Analysis", False)
+    
     if selected_players:
         # Filter data and remove players with no minutes played
         filtered_data = data[data['player_name'].isin(selected_players)]
         valid_data = filtered_data[filtered_data['minutes_decimal'] > 0]
         
         if not valid_data.empty:
+            # First chart - Minutes vs Fouls Received
+            st.subheader("Minutes Played vs Fouls Received")
             fig, ax = plt.subplots(figsize=(10, 6))
             
             # Plot the scatter points
@@ -8840,11 +8918,59 @@ def display_player_fouls_analysis():
             
             # Show data table
             st.subheader(f"Selected Player Data - {fouls_type}")
-            display_df = filtered_data[['player_name', 'team_name', 'minutes_decimal', 'fouls_count', 'fouls_per_40']].copy()
+            display_df = filtered_data[['player_name', 'team_name', 'minutes_decimal', 
+                                       'fouls_count', 'fouls_per_40', 
+                                       'fouls_committed', 'fouls_committed_per_40']].copy()
             fouls_type_label = "Shooting Fouls" if shooting_fouls_only else "Fouls" 
-            display_df.columns = ['Player', 'Team', 'Minutes Played', f'{fouls_type_label} On Player', f'{fouls_type_label} per 40 minutes']
-            display_df = display_df.sort_values(by=f'{fouls_type_label} per 40 minutes', ascending=False)
+            display_df.columns = ['Player', 'Team', 'Minutes Played', 
+                                 f'{fouls_type_label} Received', f'{fouls_type_label} Received per 40 min', 
+                                 f'{fouls_type_label} Committed', f'{fouls_type_label} Committed per 40 min']
+            display_df = display_df.sort_values(by=f'{fouls_type_label} Received per 40 min', ascending=False)
             st.dataframe(display_df)
+            
+            # Show correlation analysis if requested
+            if show_correlation:
+                st.subheader("Correlation Analysis: Fouls Committed vs. Fouls Received")
+                
+                corr_fig, error_msg = plot_foul_correlation(filtered_data, 
+                                                           f"{'Shooting ' if shooting_fouls_only else ''}")
+                if corr_fig:
+                    st.pyplot(corr_fig)
+                    
+                    # Add correlation explanation
+                    corr, p_value, n = calculate_foul_correlation(filtered_data)
+                    
+                    if p_value < 0.05:
+                        significance = "statistically significant"
+                    else:
+                        significance = "not statistically significant"
+                        
+                    if corr > 0.7:
+                        strength = "strong positive"
+                    elif corr > 0.3:
+                        strength = "moderate positive"
+                    elif corr > 0.1:
+                        strength = "weak positive"
+                    elif corr > -0.1:
+                        strength = "no"
+                    elif corr > -0.3:
+                        strength = "weak negative"
+                    elif corr > -0.7:
+                        strength = "moderate negative" 
+                    else:
+                        strength = "strong negative"
+                        
+                    st.write(f"There is a **{strength} correlation** ({corr:.3f}) between fouls committed and fouls received " +
+                            f"per 40 minutes for the selected players. This correlation is {significance} (p = {p_value:.3f}).")
+                    
+                    if corr > 0.3 and p_value < 0.05:
+                        st.write("This suggests that players who commit more fouls also tend to receive more fouls.")
+                    elif corr < -0.3 and p_value < 0.05:
+                        st.write("This suggests that players who commit fewer fouls tend to receive more fouls, or vice versa.")
+                    
+                    st.write("Note: Correlation analysis includes only players with at least 10 minutes played.")
+                else:
+                    st.warning(error_msg)
         else:
             st.warning(f"No data points with valid minutes played found for the selected players{' and shooting fouls filter' if shooting_fouls_only else ''}.")
     else:

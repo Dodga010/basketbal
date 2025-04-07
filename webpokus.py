@@ -8340,221 +8340,240 @@ import matplotlib.pyplot as plt
 import sqlite3
 import os
 import seaborn as sns
+import numpy as np
+from matplotlib.ticker import MaxNLocator
 
-def fetch_players():
-    """Fetch player names from the Shots table as in the original application"""
-    db_path = os.path.join(os.path.dirname(__file__), "database.db")
-    
-    if not os.path.exists(db_path):
-        return []
-
-    conn = sqlite3.connect(db_path)
-    query = "SELECT DISTINCT player_name FROM Shots ORDER BY player_name;"
-    players = pd.read_sql_query(query, conn)["player_name"].tolist()
-    conn.close()
-    return players
-
-def fetch_teams():
-    """Fetch team names from the Teams table"""
-    db_path = os.path.join(os.path.dirname(__file__), "database.db")
-    
-    if not os.path.exists(db_path):
-        return []
-        
-    conn = sqlite3.connect(db_path)
-    query = "SELECT DISTINCT name FROM Teams ORDER BY name;"
-    teams = pd.read_sql_query(query, conn)["name"].tolist()
-    conn.close()
-    return teams
-
-def fetch_shot_types():
-    """Fetch available shot types from the Shots table"""
-    db_path = os.path.join(os.path.dirname(__file__), "database.db")
-    
-    if not os.path.exists(db_path):
-        return []
-        
-    conn = sqlite3.connect(db_path)
-    query = "SELECT DISTINCT shot_sub_type FROM Shots WHERE shot_sub_type IS NOT NULL;"
-    shot_types = pd.read_sql_query(query, conn)["shot_sub_type"].tolist()
-    conn.close()
-    return shot_types
-
-def fetch_shooting_fouls_per_shot_type(player_name=None, team_name=None):
+def fetch_shooting_fouls_data(entity_type='player'):
     """
-    Fetch data about shooting fouls per shot type for a player or team.
+    Fetch data about shooting fouls for all players or teams.
     
     Parameters:
-    - player_name: Specific player to analyze (optional)
-    - team_name: Specific team to analyze (optional)
+    - entity_type: 'player' or 'team' to determine grouping
     
-    Returns pandas DataFrame with shooting fouls per shot type
+    Returns pandas DataFrame with total shots and fouls by player/team
     """
     db_path = os.path.join(os.path.dirname(__file__), "database.db")
     conn = sqlite3.connect(db_path)
     
-    # Base query to join Shots with PlayByPlay to identify shots with fouls
-    query = """
-    SELECT 
-        s.shot_sub_type,
-        COUNT(DISTINCT s.shot_id) AS total_shots,
-        SUM(CASE WHEN EXISTS (
-            SELECT 1 FROM PlayByPlay p 
-            WHERE p.game_id = s.game_id 
-            AND p.action_number BETWEEN s.action_number AND s.action_number + 1
-            AND p.action_type = 'foul'
-            AND p.sub_type = 'shooting'
-        ) THEN 1 ELSE 0 END) AS shooting_fouls_count
-    FROM Shots s
-    """
-    
-    # Add conditions based on player or team selection
-    if player_name:
-        query += f" WHERE s.player_name = '{player_name}'"
-    elif team_name:
-        query += f"""
-        JOIN Teams t ON s.team_id = t.tm AND s.game_id = t.game_id
-        WHERE t.name = '{team_name}'
+    if entity_type == 'player':
+        # Query to get shots and fouls by player
+        query = """
+        SELECT 
+            s.player_name AS entity_name,
+            COUNT(DISTINCT s.shot_id) AS total_shots,
+            SUM(CASE WHEN EXISTS (
+                SELECT 1 FROM PlayByPlay p 
+                WHERE p.game_id = s.game_id 
+                AND p.action_number BETWEEN s.action_number AND s.action_number + 2
+                AND p.action_type = 'foul'
+                AND p.sub_type = 'personal'
+                AND (
+                    p.qualifiers LIKE '%shooting%1freethrow%' OR 
+                    p.qualifiers LIKE '%shooting%2freethrow%' OR 
+                    p.qualifiers LIKE '%shooting%3freethrow%'
+                )
+            ) THEN 1 ELSE 0 END) AS shooting_fouls_count
+        FROM Shots s
+        WHERE s.player_name IS NOT NULL
+        GROUP BY s.player_name
+        HAVING total_shots >= 10  -- Filter out players with too few shots for meaningful analysis
         """
-    
-    # Only include shots with valid shot_sub_type
-    if player_name:
-        query += " AND s.shot_sub_type IS NOT NULL"
-    else:
-        query += " WHERE s.shot_sub_type IS NOT NULL"
-    
-    # Group by shot type
-    query += " GROUP BY s.shot_sub_type"
+    else:  # team
+        # Query to get shots and fouls by team
+        query = """
+        SELECT 
+            t.name AS entity_name,
+            COUNT(DISTINCT s.shot_id) AS total_shots,
+            SUM(CASE WHEN EXISTS (
+                SELECT 1 FROM PlayByPlay p 
+                WHERE p.game_id = s.game_id 
+                AND p.action_number BETWEEN s.action_number AND s.action_number + 2
+                AND p.action_type = 'foul'
+                AND p.sub_type = 'personal'
+                AND (
+                    p.qualifiers LIKE '%shooting%1freethrow%' OR 
+                    p.qualifiers LIKE '%shooting%2freethrow%' OR 
+                    p.qualifiers LIKE '%shooting%3freethrow%'
+                )
+            ) THEN 1 ELSE 0 END) AS shooting_fouls_count
+        FROM Shots s
+        JOIN Teams t ON s.team_id = t.tm AND s.game_id = t.game_id
+        GROUP BY t.name
+        """
     
     df = pd.read_sql_query(query, conn)
     conn.close()
     
+    # Calculate derived metrics
     if not df.empty:
-        # Calculate fouls per shot
         df['fouls_per_shot'] = df['shooting_fouls_count'] / df['total_shots']
+        df['foul_percentage'] = df['fouls_per_shot'] * 100
     
     return df
 
-def plot_shooting_fouls_chart(df, title="Shooting Fouls per Shot Type"):
+def create_scatter_plot(df, entity_type='player'):
     """
-    Create a bar chart showing shooting fouls per shot type
+    Create a scatter plot showing shooting fouls vs shot attempts
     """
-    plt.figure(figsize=(12, 6))
-    ax = sns.barplot(x='shot_sub_type', y='fouls_per_shot', data=df)
+    fig, ax = plt.subplots(figsize=(12, 8))
     
-    plt.title(title, fontsize=16)
-    plt.xlabel('Shot Type', fontsize=14)
-    plt.ylabel('Fouls per Shot', fontsize=14)
-    plt.xticks(rotation=45)
+    # Create the scatter plot with points sized by foul percentage
+    scatter = ax.scatter(
+        df['total_shots'], 
+        df['shooting_fouls_count'],
+        s=df['foul_percentage'] * 10,  # Size points by foul percentage 
+        alpha=0.6,
+        c=df['foul_percentage'],  # Color by foul percentage
+        cmap='viridis',
+    )
     
-    # Add value labels on top of bars
-    for p in ax.patches:
-        ax.annotate(f"{p.get_height():.3f}", 
-                   (p.get_x() + p.get_width() / 2., p.get_height()), 
-                   ha = 'center', va = 'bottom',
-                   fontsize=10)
+    # Add labels for the most interesting points (high shots, high fouls or high percentage)
+    top_by_shots = df.nlargest(3, 'total_shots')
+    top_by_fouls = df.nlargest(3, 'shooting_fouls_count')
+    top_by_pct = df.nlargest(3, 'foul_percentage')
+    
+    # Combine all interesting points (removing duplicates)
+    interesting_points = pd.concat([top_by_shots, top_by_fouls, top_by_pct]).drop_duplicates()
+    
+    for _, row in interesting_points.iterrows():
+        ax.annotate(
+            row['entity_name'],
+            xy=(row['total_shots'], row['shooting_fouls_count']),
+            xytext=(5, 5),
+            textcoords='offset points',
+            fontsize=9,
+            bbox=dict(boxstyle='round,pad=0.3', fc='yellow', alpha=0.3)
+        )
+    
+    # Add a colorbar to show the foul percentage scale
+    cbar = plt.colorbar(scatter)
+    cbar.set_label('Foul Percentage (%)', rotation=270, labelpad=15)
+    
+    # Set labels and title
+    entity_label = "Players" if entity_type == 'player' else "Teams"
+    ax.set_xlabel(f'Total Shot Attempts', fontsize=12)
+    ax.set_ylabel('Shooting Fouls Drawn', fontsize=12)
+    ax.set_title(f'Shooting Fouls vs Shot Attempts by {entity_label}', fontsize=14)
+    
+    # Force y-axis to use integers only (since fouls are whole numbers)
+    ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+    
+    # Add a reference line showing average foul rate
+    avg_foul_rate = df['shooting_fouls_count'].sum() / df['total_shots'].sum()
+    x_range = [df['total_shots'].min(), df['total_shots'].max()]
+    y_values = [x * avg_foul_rate for x in x_range]
+    ax.plot(x_range, y_values, 'r--', alpha=0.7, label=f'Avg Foul Rate: {avg_foul_rate:.3f}')
+    
+    # Add a grid for better readability
+    ax.grid(True, linestyle='--', alpha=0.7)
+    ax.legend()
     
     plt.tight_layout()
-    return plt
+    return fig
 
 def display_shooting_fouls_analysis():
     """
-    Display interactive analysis of shooting fouls per shot type
+    Display interactive analysis of shooting fouls
     """
-    st.title("Shooting Fouls per Shot Type Analysis")
+    st.title("Shooting Fouls Analysis Dashboard")
     
     # Create sidebar for filters
-    st.sidebar.header("Filters")
+    st.sidebar.header("Analysis Options")
     
     # Choose between team or player analysis
-    analysis_type = st.sidebar.radio("Select Analysis Type:", ["Team", "Player"])
-    
-    # Get list of teams and players using the existing functions
-    teams = fetch_teams()
-    players = fetch_players()
-    shot_types = fetch_shot_types()
-    
-    # Create selection dropdowns based on analysis type
-    if analysis_type == "Team":
-        if teams:
-            selected_team = st.sidebar.selectbox("Select Team:", teams)
-            selected_player = None
-            title_prefix = f"Team: {selected_team}"
-        else:
-            st.error("No teams found in the database.")
-            return
-    else:  # Player analysis
-        if players:
-            selected_player = st.sidebar.selectbox("Select Player:", players)
-            selected_team = None
-            title_prefix = f"Player: {selected_player}"
-        else:
-            st.error("No players found in the database.")
-            return
-    
-    # Shot type filter
-    if shot_types:
-        shot_filter_type = st.sidebar.radio("Shot Types to Display:", ["All Shot Types", "Selected Shot Types"])
-        
-        if shot_filter_type == "Selected Shot Types":
-            selected_shot_types = st.sidebar.multiselect("Select Shot Types:", 
-                                                        options=shot_types,
-                                                        default=shot_types[:min(3, len(shot_types))])
-        else:
-            selected_shot_types = shot_types
-    else:
-        st.warning("No shot types found in the database.")
-        selected_shot_types = []
+    entity_type = st.sidebar.radio("Select Analysis Type:", ["Players", "Teams"])
+    entity_type_value = 'player' if entity_type == "Players" else 'team'
     
     # Fetch data based on selections
-    df = fetch_shooting_fouls_per_shot_type(player_name=selected_player, team_name=selected_team)
+    df = fetch_shooting_fouls_data(entity_type=entity_type_value)
     
-    # Filter data by selected shot types
-    if shot_filter_type == "Selected Shot Types" and selected_shot_types:
-        df = df[df['shot_sub_type'].isin(selected_shot_types)]
-    
-    # Generate and display visualization
     if not df.empty:
-        st.subheader(f"Shooting Fouls Analysis for {title_prefix}")
+        # Summary statistics
+        total_shots = df['total_shots'].sum()
+        total_fouls = df['shooting_fouls_count'].sum()
+        overall_foul_rate = (total_fouls / total_shots) if total_shots > 0 else 0
         
-        # Display the raw data as a table
-        st.write("Data Summary:")
+        # Create metrics at the top
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric(f"Total Shots ({entity_type})", f"{total_shots:,}")
+        with col2:
+            st.metric("Total Shooting Fouls", f"{total_fouls:,}")
+        with col3:
+            st.metric("Overall Foul Rate", f"{overall_foul_rate:.3f} ({overall_foul_rate*100:.1f}%)")
+        
+        # Create and display the scatter plot
+        st.subheader(f"Shooting Fouls vs Shot Attempts by {entity_type}")
+        
+        fig = create_scatter_plot(df, entity_type_value)
+        st.pyplot(fig)
+        
+        # Add explanation of the visualization
+        st.info("""
+        **How to read this chart:**
+        - Each dot represents a single player or team
+        - X-axis shows the total number of shot attempts
+        - Y-axis shows the total number of shooting fouls drawn
+        - The size and color of each dot represent the foul drawing rate (fouls per shot)
+        - The dashed red line shows the average foul rate across all data
+        - Players/teams above the line are more effective at drawing fouls than average
+        """)
+        
+        # Display the data table with sorting options
+        st.subheader("Detailed Data")
+        
+        # Add sorting options
+        sort_by = st.selectbox(
+            "Sort by:",
+            ["Total Shots", "Shooting Fouls", "Foul Drawing Rate"]
+        )
+        
+        sort_column_map = {
+            "Total Shots": "total_shots",
+            "Shooting Fouls": "shooting_fouls_count",
+            "Foul Drawing Rate": "fouls_per_shot"
+        }
         
         # Format the dataframe for better display
-        display_df = df.copy()
-        display_df['foul_rate_percentage'] = (display_df['fouls_per_shot'] * 100).round(2).astype(str) + '%'
+        display_df = df.copy().sort_values(sort_column_map[sort_by], ascending=False)
+        display_df['foul_percentage'] = display_df['foul_percentage'].round(2).astype(str) + '%'
         display_df = display_df.rename(columns={
-            'shot_sub_type': 'Shot Type',
+            'entity_name': entity_type.rstrip('s'),  # Remove plural 's' 
             'total_shots': 'Total Shots',
             'shooting_fouls_count': 'Shooting Fouls',
             'fouls_per_shot': 'Fouls per Shot',
-            'foul_rate_percentage': 'Foul Rate'
+            'foul_percentage': 'Foul Rate'
         })
         
         st.dataframe(display_df)
         
-        # Create and display the chart
-        fig = plot_shooting_fouls_chart(df, title=f"Shooting Fouls per Shot Type - {title_prefix}")
-        st.pyplot(fig)
+        # Top performers analysis
+        st.subheader("Key Insights")
         
-        # Additional insights
-        if len(df) > 0:
-            max_foul_type = df.loc[df['fouls_per_shot'].idxmax()]
-            st.write(f"**Key Insight:** The shot type with highest foul rate is "
-                    f"**{max_foul_type['shot_sub_type']}** with "
-                    f"**{max_foul_type['fouls_per_shot']:.3f}** fouls per shot "
-                    f"({max_foul_type['fouls_per_shot']*100:.1f}%).")
-            
-            # Show total fouls drawn
-            total_fouls = df['shooting_fouls_count'].sum()
-            total_shots = df['total_shots'].sum()
-            st.write(f"**Total Stats:** {total_fouls} shooting fouls drawn on {total_shots} shots "
-                    f"({total_fouls/total_shots:.3f} fouls per shot overall, "
-                    f"{total_fouls/total_shots*100:.1f}%)")
+        top_fouls = df.nlargest(1, 'shooting_fouls_count').iloc[0]
+        top_foul_rate = df.nlargest(1, 'fouls_per_shot').iloc[0]
+        top_shots = df.nlargest(1, 'total_shots').iloc[0]
+        
+        entity_term = "player" if entity_type_value == 'player' else "team"
+        
+        st.write(f"• The {entity_term} with the **most shooting fouls drawn** is "
+                f"**{top_fouls['entity_name']}** with "
+                f"**{top_fouls['shooting_fouls_count']}** fouls on {top_fouls['total_shots']} shots.")
+        
+        st.write(f"• The {entity_term} with the **highest foul-drawing rate** is "
+                f"**{top_foul_rate['entity_name']}** with "
+                f"**{top_foul_rate['fouls_per_shot']:.3f}** fouls per shot "
+                f"({top_foul_rate['foul_percentage']:.1f}%).")
+        
+        if top_shots['entity_name'] != top_fouls['entity_name']:
+            st.write(f"• The {entity_term} with the **most shot attempts** is "
+                    f"**{top_shots['entity_name']}** with "
+                    f"**{top_shots['total_shots']}** shots but drawing only {top_shots['shooting_fouls_count']} fouls "
+                    f"({top_shots['fouls_per_shot']:.3f} per shot).")
     else:
-        st.warning("No data available for the selected filters.")
+        st.warning("No data available for analysis. Please ensure your database contains valid shot and foul records.")
 
-# Add this function to the main menu options in your webpokus.py file
+# To integrate with your main application, add this function to the main menu options
 
 def main():
     st.title("🏀 Basketball Stats Viewer")

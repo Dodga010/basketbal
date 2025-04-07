@@ -8677,23 +8677,39 @@ import matplotlib.pyplot as plt
 import numpy as np
 import streamlit as st
 import os
+import json
 
 db_path = os.path.join(os.path.dirname(__file__), "database.db")
 
-def fetch_player_fouls_and_minutes():
+def fetch_player_fouls_and_minutes(shooting_fouls_only=False):
     """Fetch fouls committed on players and their total minutes played"""
     conn = sqlite3.connect(db_path)
     
-    # Query to count fouls on each player
-    fouls_query = """
-    SELECT p.first_name || ' ' || p.last_name AS player_name, COUNT(*) AS fouls_count,
-           t.name as team_name
-    FROM PlayByPlay pbp
-    JOIN Players p ON pbp.player_id = p.json_player_id AND pbp.game_id = p.game_id
-    JOIN Teams t ON p.team_id = t.tm AND p.game_id = t.game_id
-    WHERE pbp.action_type = 'foulon'
-    GROUP BY player_name, team_name
-    """
+    # Query to count fouls on each player - with option for shooting fouls only
+    if shooting_fouls_only:
+        fouls_query = """
+        SELECT p.first_name || ' ' || p.last_name AS player_name, COUNT(*) AS fouls_count,
+               t.name as team_name
+        FROM PlayByPlay pbp
+        JOIN Players p ON pbp.player_id = p.json_player_id AND pbp.game_id = p.game_id
+        JOIN Teams t ON p.team_id = t.tm AND p.game_id = t.game_id
+        JOIN PlayByPlay pbp_prev ON pbp.previous_action = pbp_prev.action_number 
+                                  AND pbp.game_id = pbp_prev.game_id
+                                  AND pbp_prev.action_type = 'foul'
+        WHERE pbp.action_type = 'foulon'
+        AND (pbp_prev.qualifiers LIKE '%shooting%' OR pbp_prev.qualifiers LIKE '%2freethrow%' OR pbp_prev.qualifiers LIKE '%3freethrow%')
+        GROUP BY player_name, team_name
+        """
+    else:
+        fouls_query = """
+        SELECT p.first_name || ' ' || p.last_name AS player_name, COUNT(*) AS fouls_count,
+               t.name as team_name
+        FROM PlayByPlay pbp
+        JOIN Players p ON pbp.player_id = p.json_player_id AND pbp.game_id = p.game_id
+        JOIN Teams t ON p.team_id = t.tm AND p.game_id = t.game_id
+        WHERE pbp.action_type = 'foulon'
+        GROUP BY player_name, team_name
+        """
     
     # Query to sum minutes played by each player
     minutes_query = """
@@ -8749,8 +8765,11 @@ def display_player_fouls_analysis():
     st.title("Player Fouls Analysis")
     st.subheader("Analysis of fouls committed on players vs. minutes played")
     
-    # Fetch data
-    data = fetch_player_fouls_and_minutes()
+    # Add shooting fouls toggle button
+    shooting_fouls_only = st.checkbox("Show Only Shooting Fouls", False)
+    
+    # Fetch data with appropriate filter
+    data = fetch_player_fouls_and_minutes(shooting_fouls_only)
     
     # Create team dropdown
     teams = fetch_teams()
@@ -8807,25 +8826,27 @@ def display_player_fouls_analysis():
             # Plot mean line across the visible area of the chart
             x_line = np.array([min_minutes, max_minutes])
             y_line = mean_fouls_per_minute * x_line
-            ax.plot(x_line, y_line, 'r--', label=f'Mean Fouls/Min: {mean_fouls_per_minute:.4f}')
+            fouls_type = "Shooting Fouls" if shooting_fouls_only else "All Fouls"
+            ax.plot(x_line, y_line, 'r--', label=f'Mean {fouls_type}/Min: {mean_fouls_per_minute:.4f}')
             ax.legend()
             
             ax.set_xlabel('Total Minutes Played')
-            ax.set_ylabel('Number of Fouls Committed on Player')
-            ax.set_title('Minutes Played vs Fouls Committed on Players')
+            ax.set_ylabel(f'Number of {fouls_type} on Player')
+            ax.set_title(f'Minutes Played vs {fouls_type} Committed on Players')
             ax.grid(True)
             
             # Show plot
             st.pyplot(fig)
             
             # Show data table
-            st.subheader("Selected Player Data")
+            st.subheader(f"Selected Player Data - {fouls_type}")
             display_df = filtered_data[['player_name', 'team_name', 'minutes_decimal', 'fouls_count', 'fouls_per_40']].copy()
-            display_df.columns = ['Player', 'Team', 'Minutes Played', 'Fouls On Player', 'Fouls per 40 minutes']
-            display_df = display_df.sort_values(by='Fouls per 40 minutes', ascending=False)
+            fouls_type_label = "Shooting Fouls" if shooting_fouls_only else "Fouls" 
+            display_df.columns = ['Player', 'Team', 'Minutes Played', f'{fouls_type_label} On Player', f'{fouls_type_label} per 40 minutes']
+            display_df = display_df.sort_values(by=f'{fouls_type_label} per 40 minutes', ascending=False)
             st.dataframe(display_df)
         else:
-            st.warning("No data points with valid minutes played found for the selected players.")
+            st.warning(f"No data points with valid minutes played found for the selected players{' and shooting fouls filter' if shooting_fouls_only else ''}.")
     else:
         st.info("Please select one or more players to display the analysis")
 def main():

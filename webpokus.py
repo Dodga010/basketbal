@@ -8674,6 +8674,7 @@ def display_shooting_fouls_analysis():
 import sqlite3
 import pandas as pd
 import matplotlib.pyplot as plt
+import numpy as np
 import streamlit as st
 import os
 
@@ -8695,7 +8696,6 @@ def fetch_player_fouls_and_minutes():
     """
     
     # Query to sum minutes played by each player
-    # Fixed the ambiguous column error by specifying p.game_id
     minutes_query = """
     SELECT first_name || ' ' || last_name AS player_name, minutes_played, p.game_id,
            t.name as team_name
@@ -8726,6 +8726,13 @@ def fetch_player_fouls_and_minutes():
     # Merge fouls and minutes data
     result = pd.merge(fouls_df, total_minutes, on=['player_name', 'team_name'], how='outer')
     result.fillna({'fouls_count': 0, 'minutes_decimal': 0}, inplace=True)
+    
+    # Calculate fouls per 40 minutes
+    result['fouls_per_40'] = np.where(
+        result['minutes_decimal'] > 0,
+        (result['fouls_count'] / result['minutes_decimal']) * 40,
+        0
+    )
     
     return result
 
@@ -8778,6 +8785,22 @@ def display_player_fouls_analysis():
                         xytext=(5, 5), 
                         textcoords='offset points')
         
+        # Calculate and add mean line
+        # Filter out players with no minutes to avoid division by zero
+        valid_data = filtered_data[filtered_data['minutes_decimal'] > 0]
+        if not valid_data.empty:
+            # Calculate mean fouls per minute
+            mean_fouls_per_minute = valid_data['fouls_count'].sum() / valid_data['minutes_decimal'].sum()
+            
+            # Get max minutes for line plotting
+            max_minutes = filtered_data['minutes_decimal'].max()
+            
+            # Plot mean line
+            x_line = np.array([0, max_minutes])
+            y_line = mean_fouls_per_minute * x_line
+            ax.plot(x_line, y_line, 'r--', label=f'Mean Fouls/Min: {mean_fouls_per_minute:.3f}')
+            ax.legend()
+        
         ax.set_xlabel('Total Minutes Played')
         ax.set_ylabel('Number of Fouls Committed on Player')
         ax.set_title('Minutes Played vs Fouls Committed on Players')
@@ -8788,8 +8811,9 @@ def display_player_fouls_analysis():
         
         # Show data table
         st.subheader("Selected Player Data")
-        display_df = filtered_data[['player_name', 'team_name', 'minutes_decimal', 'fouls_count']].copy()
-        display_df.columns = ['Player', 'Team', 'Minutes Played', 'Fouls On Player']
+        display_df = filtered_data[['player_name', 'team_name', 'minutes_decimal', 'fouls_count', 'fouls_per_40']].copy()
+        display_df.columns = ['Player', 'Team', 'Minutes Played', 'Fouls On Player', 'Fouls per 40 minutes']
+        display_df = display_df.sort_values(by='Fouls per 40 minutes', ascending=False)
         st.dataframe(display_df)
     else:
         st.info("Please select one or more players to display the analysis")

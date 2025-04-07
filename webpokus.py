@@ -4649,157 +4649,133 @@ import seaborn as sns
 import streamlit as st
 
 def analyze_four_factors_wins(db_path="database.db"):
-    """Analyze how often teams with better four factor stats win their games."""
-    
-    # Connect to database
+    """Analyze how four factors correlate with wins, including opponent factors."""
     conn = sqlite3.connect(db_path)
     
-    # Query to get game data with four factors for each team
-    query = """
-    SELECT 
-        t1.game_id,
-        t1.name AS team1,
-        t2.name AS team2,
-        (t1.p1_score + t1.p2_score + t1.p3_score + t1.p4_score) AS score1,
-        (t2.p1_score + t2.p2_score + t2.p3_score + t2.p4_score) AS score2,
-        
-        -- Calculate four factors for team 1
-        (t1.field_goals_made + 0.5 * t1.three_pointers_made) * 100.0 / NULLIF(t1.field_goals_attempted, 0) AS efg1,
-        t1.turnovers * 100.0 / NULLIF((t1.field_goals_attempted + 0.44 * t1.free_throws_attempted), 0) AS tov1,
-        t1.rebounds_offensive * 100.0 / NULLIF((t1.rebounds_offensive + t2.rebounds_defensive), 0) AS orb1,
-        t1.free_throws_attempted * 100.0 / NULLIF(t1.field_goals_attempted, 0) AS ftr1,
-        
-        -- Calculate four factors for team 2
-        (t2.field_goals_made + 0.5 * t2.three_pointers_made) * 100.0 / NULLIF(t2.field_goals_attempted, 0) AS efg2, 
-        t2.turnovers * 100.0 / NULLIF((t2.field_goals_attempted + 0.44 * t2.free_throws_attempted), 0) AS tov2,
-        t2.rebounds_offensive * 100.0 / NULLIF((t2.rebounds_offensive + t1.rebounds_defensive), 0) AS orb2,
-        t2.free_throws_attempted * 100.0 / NULLIF(t2.field_goals_attempted, 0) AS ftr2
-        
-    FROM Teams t1
-    JOIN Teams t2 ON t1.game_id = t2.game_id 
-    WHERE t1.tm = 1 AND t2.tm = 2
-    """
+    # Get all teams
+    teams_query = "SELECT DISTINCT name FROM Teams"
+    teams_df = pd.read_sql_query(teams_query, conn)
     
-    # Execute query and load into DataFrame
-    df = pd.read_sql(query, conn)
+    all_team_stats = []
+    
+    for _, team_row in teams_df.iterrows():
+        team_name = team_row['name']
+        
+        # Get the four factors stats for the team and their opponents
+        team_stats_df = fetch_team_and_opponent_four_factors(team_name)
+        
+        if not team_stats_df.empty:
+            # Add team name and calculate average stats
+            avg_stats = {
+                'Team': team_name,
+                'Games': len(team_stats_df),
+                'Wins': sum(team_stats_df['Result'] == 'Win'),
+                'Win Rate': round(sum(team_stats_df['Result'] == 'Win') / len(team_stats_df) * 100, 1),
+                'eFG%': round(team_stats_df['Team eFG%'].mean(), 1),
+                'TOV%': round(team_stats_df['Team TOV%'].mean(), 1),
+                'ORB%': round(team_stats_df['Team ORB%'].mean(), 1),
+                'FTR': round(team_stats_df['Team FTR'].mean(), 1),
+                'Opp eFG%': round(team_stats_df['Opp eFG%'].mean(), 1),
+                'Opp TOV%': round(team_stats_df['Opp TOV%'].mean(), 1),
+                'Opp ORB%': round(team_stats_df['Opp ORB%'].mean(), 1),
+                'Opp FTR': round(team_stats_df['Opp FTR'].mean(), 1),
+                'eFG% Diff': round(team_stats_df['Team eFG%'].mean() - team_stats_df['Opp eFG%'].mean(), 1),
+                'TOV% Diff': round(team_stats_df['Opp TOV%'].mean() - team_stats_df['Team TOV%'].mean(), 1),
+                'ORB% Diff': round(team_stats_df['Team ORB%'].mean() - team_stats_df['Opp ORB%'].mean(), 1),
+                'FTR Diff': round(team_stats_df['Team FTR'].mean() - team_stats_df['Opp FTR'].mean(), 1)
+            }
+            
+            all_team_stats.append(avg_stats)
+    
     conn.close()
-    
-    # Drop games with null values in any four factor stat
-    df = df.dropna()
-    
-    # Determine winner (1 for team1, 2 for team2)
-    df['winner'] = (df['score1'] < df['score2']).astype(int) + 1
-    
-    # For each four factor, determine which team had the better stat
-    # Note: For TOV%, lower is better, so we invert the comparison
-    df['better_efg'] = (df['efg1'] < df['efg2']).astype(int) + 1  
-    df['better_tov'] = (df['tov1'] > df['tov2']).astype(int) + 1  # Lower TOV% is better
-    df['better_orb'] = (df['orb1'] < df['orb2']).astype(int) + 1
-    df['better_ftr'] = (df['ftr1'] < df['ftr2']).astype(int) + 1
-    
-    # Calculate results for each factor
-    results = {}
-    
-    factor_names = {
-        'efg': 'Shooting (eFG%)',
-        'tov': 'Turnovers (TOV%)',
-        'orb': 'Offensive Rebounding (ORB%)', 
-        'ftr': 'Free Throw Rate (FTR)'
-    }
-    
-    for factor, factor_name in factor_names.items():
-        # Count games where team with better factor won
-        better_col = f'better_{factor}'
-        win_count = sum(df[better_col] == df['winner'])
-        total_count = len(df)
-        win_pct = win_count / total_count * 100 if total_count > 0 else 0
-        
-        results[factor] = {
-            'Factor': factor_name,
-            'Win Count': win_count,
-            'Total Games': total_count,
-            'Win Percentage': win_pct
-        }
-    
-    # Convert to DataFrame
-    results_df = pd.DataFrame(list(results.values()))
-    
-    # Sort by win percentage
-    results_df = results_df.sort_values('Win Percentage', ascending=False)
-    
-    return df, results_df
+    return pd.DataFrame(all_team_stats)
 
 def display_four_factors_analysis():
-    """Display the four factors win analysis in Streamlit."""
-    st.title("🏀 Four Factors Win Analysis")
-    st.write("""
-    ## How often do teams with better Four Factor stats win their games?
+    """Display four factors analysis including opponent stats."""
+    st.title("Four Factors Win Analysis")
     
-    This analysis examines how well Dean Oliver's Four Factors of Basketball Success
-    predict game outcomes. For each factor, we calculate how often the team with 
-    the better stat won the game.
-    """)
+    with st.spinner("Analyzing Four Factors..."):
+        df = analyze_four_factors_wins()
     
-    # Get the data
-    df, results_df = analyze_four_factors_wins()
-    
-    if df.empty:
-        st.warning("No data available for analysis.")
-        return
-    
-    # Create bar chart for win percentages
-    fig, ax = plt.subplots(figsize=(10, 6))
-    
-    # Use nicer color palette
-    bar_colors = sns.color_palette("viridis", len(results_df))
-    
-    # Create bars
-    bars = ax.bar(
-        results_df['Factor'], 
-        results_df['Win Percentage'], 
-        color=bar_colors
-    )
-    
-    # Add percentage labels on top of bars
-    for bar in bars:
-        height = bar.get_height()
-        ax.text(
-            bar.get_x() + bar.get_width()/2., 
-            height + 1,
-            f'{height:.1f}%', 
-            ha='center', va='bottom', 
-            fontweight='bold'
-        )
-    
-    # Add styling
-    ax.set_ylim(0, 100)
-    ax.axhline(y=50, color='gray', linestyle='--', alpha=0.7)
-    ax.text(0.1, 51, 'Random chance (50%)', fontsize=9, color='gray')
-    ax.set_ylabel('Win Percentage (%)')
-    ax.set_title('Win Percentage When Team Has Better Four Factors Stats')
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    
-    # Display the chart
-    st.pyplot(fig)
-    
-    # Display metrics
-    st.subheader("Win Percentages by Factor")
-    
-    cols = st.columns(len(results_df))
-    for i, (_, row) in enumerate(results_df.iterrows()):
-        with cols[i]:
-            st.metric(
-                label=row['Factor'],
-                value=f"{row['Win Percentage']:.1f}%",
-                delta=f"{row['Win Count']}/{row['Total Games']} games"
-            )
-    
-    # Display detailed table
-    st.subheader("Detailed Results")
-    
-    # Format win percentage for display
-    display_df = results_df
+    if not df.empty:
+        # Sort by win rate
+        df = df.sort_values('Win Rate', ascending=False)
+        
+        # Add styling
+        def highlight_win_rate(s):
+            return ['background-color: #c6efce' if val > 50 else 'background-color: #ffc7ce' for val in s]
+        
+        def highlight_four_factors_diff(s):
+            styles = []
+            for val in s:
+                if pd.isna(val):
+                    styles.append('')
+                elif val > 0:
+                    styles.append('background-color: #c6efce')  # Green for positive difference
+                else:
+                    styles.append('background-color: #ffc7ce')  # Red for negative difference
+            return styles
+        
+        # Apply styling
+        styled_df = df.style.apply(highlight_win_rate, subset=['Win Rate'])
+        styled_df = styled_df.apply(highlight_four_factors_diff, subset=['eFG% Diff', 'TOV% Diff', 'ORB% Diff', 'FTR Diff'])
+        
+        # Display team stats
+        st.subheader("Team Four Factors Statistics")
+        st.markdown("""
+        This table shows team statistics for the Four Factors:
+        - **eFG%**: Effective Field Goal Percentage
+        - **TOV%**: Turnover Percentage
+        - **ORB%**: Offensive Rebound Percentage
+        - **FTR**: Free Throw Rate
+        
+        The table includes both team and opponent values for each factor, plus the differential.
+        Green highlighting indicates positive values, red indicates negative values.
+        """)
+        
+        # Display the styled table
+        st.dataframe(styled_df, height=500)
+        
+        # Additional visualizations
+        st.subheader("Four Factors Correlation with Win Rate")
+        
+        chart_data = pd.melt(df, 
+                             id_vars=['Team', 'Win Rate'],
+                             value_vars=['eFG% Diff', 'TOV% Diff', 'ORB% Diff', 'FTR Diff'],
+                             var_name='Factor', value_name='Differential')
+        
+        chart = alt.Chart(chart_data).mark_circle(size=60).encode(
+            x=alt.X('Differential:Q', title='Factor Differential (Team - Opponent)'),
+            y=alt.Y('Win Rate:Q', title='Win Rate (%)'),
+            color='Factor:N',
+            tooltip=['Team', 'Factor', 'Differential', 'Win Rate']
+        ).properties(
+            width=700,
+            height=400,
+            title='Relationship Between Four Factors Differential and Win Rate'
+        ).interactive()
+        
+        st.altair_chart(chart)
+        
+        # Add correlation analysis
+        st.subheader("Correlation Analysis")
+        corr_data = {
+            'Factor': ['eFG% Differential', 'TOV% Differential', 'ORB% Differential', 'FTR Differential'],
+            'Correlation with Win Rate': [
+                df['eFG% Diff'].corr(df['Win Rate']),
+                df['TOV% Diff'].corr(df['Win Rate']),
+                df['ORB% Diff'].corr(df['Win Rate']),
+                df['FTR Diff'].corr(df['Win Rate'])
+            ]
+        }
+        corr_df = pd.DataFrame(corr_data)
+        corr_df['Correlation with Win Rate'] = corr_df['Correlation with Win Rate'].round(3)
+        corr_df = corr_df.sort_values('Correlation with Win Rate', ascending=False)
+        
+        st.table(corr_df)
+        
+    else:
+        st.error("No data available for analysis")
 
 import os
 import sqlite3
@@ -8021,6 +7997,93 @@ def analyze_team_performance_trends(team_name):
     
     return results
 
+def fetch_team_and_opponent_four_factors(team_name):
+    """Fetch both team and opponent four factors for a specific team."""
+    conn = sqlite3.connect(db_path)
+    
+    # Get all games where this team played
+    query = """
+    SELECT g.game_id, 
+           t1.team_id AS team_id, 
+           t2.team_id AS opponent_team_id,
+           t1.name AS team_name,
+           t2.name AS opponent_name
+    FROM Games g
+    JOIN Teams t1 ON g.game_id = t1.game_id
+    JOIN Teams t2 ON g.game_id = t2.game_id
+    WHERE t1.name = ? AND t1.team_id != t2.team_id
+    """
+    
+    games_df = pd.read_sql_query(query, conn, params=(team_name,))
+    
+    # Prepare dataframe to store results
+    results = []
+    
+    for _, row in games_df.iterrows():
+        game_id = row['game_id']
+        team_id = row['team_id']
+        opponent_id = row['opponent_team_id']
+        opponent_name = row['opponent_name']
+        
+        # Fetch team stats
+        team_stats = fetch_team_stats(game_id, team_id)
+        opponent_stats = fetch_team_stats(game_id, opponent_id)
+        
+        if team_stats is not None and opponent_stats is not None:
+            # Calculate four factors for team
+            team_efg = ((team_stats['field_goals_made'] + 0.5 * team_stats['three_pointers_made']) / 
+                        team_stats['field_goals_attempted']) * 100 if team_stats['field_goals_attempted'] > 0 else 0
+                        
+            team_tor = (team_stats['turnovers'] / 
+                       (team_stats['field_goals_attempted'] + team_stats['turnovers'] + 
+                        0.44 * team_stats['free_throws_attempted'])) * 100 if (team_stats['field_goals_attempted'] + 
+                        team_stats['turnovers'] + 0.44 * team_stats['free_throws_attempted']) > 0 else 0
+                        
+            team_orb = (team_stats['rebounds_offensive'] / 
+                       (team_stats['rebounds_offensive'] + opponent_stats['rebounds_defensive'])) * 100 if (
+                        team_stats['rebounds_offensive'] + opponent_stats['rebounds_defensive']) > 0 else 0
+                        
+            team_ftr = (team_stats['free_throws_attempted'] / 
+                       team_stats['field_goals_attempted']) * 100 if team_stats['field_goals_attempted'] > 0 else 0
+            
+            # Calculate four factors for opponent
+            opp_efg = ((opponent_stats['field_goals_made'] + 0.5 * opponent_stats['three_pointers_made']) / 
+                       opponent_stats['field_goals_attempted']) * 100 if opponent_stats['field_goals_attempted'] > 0 else 0
+                       
+            opp_tor = (opponent_stats['turnovers'] / 
+                      (opponent_stats['field_goals_attempted'] + opponent_stats['turnovers'] + 
+                       0.44 * opponent_stats['free_throws_attempted'])) * 100 if (opponent_stats['field_goals_attempted'] + 
+                       opponent_stats['turnovers'] + 0.44 * opponent_stats['free_throws_attempted']) > 0 else 0
+                       
+            opp_orb = (opponent_stats['rebounds_offensive'] / 
+                      (opponent_stats['rebounds_offensive'] + team_stats['rebounds_defensive'])) * 100 if (
+                       opponent_stats['rebounds_offensive'] + team_stats['rebounds_defensive']) > 0 else 0
+                       
+            opp_ftr = (opponent_stats['free_throws_attempted'] / 
+                      opponent_stats['field_goals_attempted']) * 100 if opponent_stats['field_goals_attempted'] > 0 else 0
+            
+            # Score difference and win/loss
+            score_diff = team_stats['score'] - opponent_stats['score']
+            result = "Win" if score_diff > 0 else "Loss" if score_diff < 0 else "Draw"
+            
+            results.append({
+                'Game ID': game_id,
+                'Opponent': opponent_name,
+                'Score': f"{team_stats['score']} - {opponent_stats['score']}",
+                'Result': result,
+                'Team eFG%': round(team_efg, 1),
+                'Team TOV%': round(team_tor, 1),
+                'Team ORB%': round(team_orb, 1),
+                'Team FTR': round(team_ftr, 1),
+                'Opp eFG%': round(opp_efg, 1),
+                'Opp TOV%': round(opp_tor, 1),
+                'Opp ORB%': round(opp_orb, 1),
+                'Opp FTR': round(opp_ftr, 1)
+            })
+    
+    conn.close()
+    return pd.DataFrame(results)
+
 def display_team_performance_analysis():
     """Display team performance analysis in Streamlit"""
     st.title("📊 Team Performance Analysis")
@@ -8333,9 +8396,153 @@ def display_team_performance_analysis():
             st.write("### 🔽 Games with Significantly Worse Than Typical Performance")
             for game in worse_than_typical:
                 st.write(f"• vs {game['opponent_name']}: {game['performance_vs_typical']:.1f} points worse than typical ({game['score']})")
+
+def fetch_shooting_fouls_per_shot_type(player_name=None, team_name=None):
+    """
+    Fetch data about shooting fouls per shot type for a player or team.
+    
+    Parameters:
+    - player_name: Specific player to analyze (optional)
+    - team_name: Specific team to analyze (optional)
+    
+    Returns pandas DataFrame with shooting fouls per shot type
+    """
+    db_path = os.path.join(os.path.dirname(__file__), "database.db")
+    conn = sqlite3.connect(db_path)
+    
+    # Base query to join Shots with PlayByPlay to identify shots with fouls
+    query = """
+    SELECT 
+        s.shot_sub_type,
+        COUNT(DISTINCT s.shot_id) AS total_shots,
+        SUM(CASE WHEN EXISTS (
+            SELECT 1 FROM PlayByPlay p 
+            WHERE p.game_id = s.game_id 
+            AND p.action_number = s.action_number
+            AND p.action_type = 'foul'
+            AND p.sub_type = 'shooting'
+        ) THEN 1 ELSE 0 END) AS shooting_fouls_count
+    FROM Shots s
+    """
+    
+    # Add conditions based on player or team selection
+    if player_name:
+        query += f" WHERE s.player_name = '{player_name}'"
+    elif team_name:
+        query += f"""
+        JOIN Teams t ON s.team_id = t.team_id AND s.game_id = t.game_id
+        WHERE t.name = '{team_name}'
+        """
+    
+    # Group by shot type
+    query += " GROUP BY s.shot_sub_type"
+    
+    df = pd.read_sql_query(query, conn)
+    conn.close()
+    
+    # Calculate fouls per shot
+    df['fouls_per_shot'] = df['shooting_fouls_count'] / df['total_shots']
+    
+    return df
+
+def plot_shooting_fouls_chart(df, title="Shooting Fouls per Shot Type"):
+    """
+    Create a bar chart showing shooting fouls per shot type
+    """
+    plt.figure(figsize=(12, 6))
+    ax = sns.barplot(x='shot_sub_type', y='fouls_per_shot', data=df)
+    
+    plt.title(title, fontsize=16)
+    plt.xlabel('Shot Type', fontsize=14)
+    plt.ylabel('Fouls per Shot', fontsize=14)
+    plt.xticks(rotation=45)
+    
+    # Add value labels on top of bars
+    for p in ax.patches:
+        ax.annotate(f"{p.get_height():.3f}", 
+                   (p.get_x() + p.get_width() / 2., p.get_height()), 
+                   ha = 'center', va = 'bottom',
+                   fontsize=10)
+    
+    plt.tight_layout()
+    return plt
+
+def display_shooting_fouls_analysis():
+    """
+    Display interactive analysis of shooting fouls per shot type
+    """
+    st.title("Shooting Fouls per Shot Type Analysis")
+    
+    # Create sidebar for filters
+    st.sidebar.header("Filters")
+    
+    # Choose between team or player analysis
+    analysis_type = st.sidebar.radio("Select Analysis Type:", ["Team", "Player"])
+    
+    # Get list of teams and players
+    conn = sqlite3.connect(os.path.join(os.path.dirname(__file__), "database.db"))
+    teams_df = pd.read_sql_query("SELECT DISTINCT name FROM Teams", conn)
+    players_df = pd.read_sql_query("SELECT DISTINCT player_name FROM Players", conn)
+    shot_types_df = pd.read_sql_query("SELECT DISTINCT shot_sub_type FROM Shots", conn)
+    conn.close()
+    
+    # Create selection dropdowns based on analysis type
+    if analysis_type == "Team":
+        selected_team = st.sidebar.selectbox("Select Team:", teams_df['name'].tolist())
+        selected_player = None
+        title_prefix = f"Team: {selected_team}"
+    else:  # Player analysis
+        selected_player = st.sidebar.selectbox("Select Player:", players_df['player_name'].tolist())
+        selected_team = None
+        title_prefix = f"Player: {selected_player}"
+    
+    # Shot type filter
+    available_shot_types = shot_types_df['shot_sub_type'].tolist()
+    shot_filter_type = st.sidebar.radio("Shot Types to Display:", ["All Shot Types", "Selected Shot Types"])
+    
+    if shot_filter_type == "Selected Shot Types":
+        selected_shot_types = st.sidebar.multiselect("Select Shot Types:", 
+                                                     options=available_shot_types,
+                                                     default=available_shot_types[:3])
+    else:
+        selected_shot_types = available_shot_types
+    
+    # Fetch data based on selections
+    df = fetch_shooting_fouls_per_shot_type(player_name=selected_player, team_name=selected_team)
+    
+    # Filter data by selected shot types
+    if shot_filter_type == "Selected Shot Types":
+        df = df[df['shot_sub_type'].isin(selected_shot_types)]
+    
+    # Generate and display visualization
+    if not df.empty:
+        st.subheader(f"Shooting Fouls Analysis for {title_prefix}")
+        
+        # Display the raw data as a table
+        st.write("Data Summary:")
+        st.dataframe(df)
+        
+        # Create and display the chart
+        fig = plot_shooting_fouls_chart(df, title=f"Shooting Fouls per Shot Type - {title_prefix}")
+        st.pyplot(fig)
+        
+        # Additional insights
+        max_foul_type = df.loc[df['fouls_per_shot'].idxmax()]
+        st.write(f"**Key Insight:** The shot type with highest foul rate is "
+                f"**{max_foul_type['shot_sub_type']}** with "
+                f"**{max_foul_type['fouls_per_shot']:.3f}** fouls per shot.")
+        
+        # Show total fouls drawn
+        total_fouls = df['shooting_fouls_count'].sum()
+        total_shots = df['total_shots'].sum()
+        st.write(f"**Total Stats:** {total_fouls} shooting fouls drawn on {total_shots} shots "
+                f"({total_fouls/total_shots:.3f} fouls per shot overall)")
+    else:
+        st.warning("No data available for the selected filters.")
+
 def main():
     st.title("🏀 Basketball Stats Viewer")
-    page = st.sidebar.selectbox("📌 Choose a page", ["Team Season Boxscore", "Shot Chart","Match report", "Four Factors", "Lebron", "Play by Play", "Match Detail", "Five Player Segments", "Team Lineup Analysis"])
+    page = st.sidebar.selectbox("📌 Choose a page", ["Team Season Boxscore", "Shot Chart","Match report", "Four Factors", "Lebron", "Play by Play", "Match Detail", "Five Player Segments", "Team Lineup Analysis", "Shooting Foul Analysis"])
 
     if page == "Match Detail":
         display_match_detail()
@@ -8383,6 +8590,8 @@ def main():
 
     elif page == "Five Player Segments":
         display_five_player_segments()
+    elif page == "Shooting Foul Analysis":
+        display_shooting_fouls_analysis()
     # ... rest of your main function ...
     elif page == "Team Lineup Analysis":
         display_team_analysis()

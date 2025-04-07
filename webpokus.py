@@ -8671,6 +8671,101 @@ def display_shooting_fouls_analysis():
         st.warning("No data available for the selected entities and shot types. Try different selections.")
 
 # To integrate with your main application, add this function to the main menu options
+import sqlite3
+import pandas as pd
+import matplotlib.pyplot as plt
+import streamlit as st
+import os
+
+db_path = os.path.join(os.path.dirname(__file__), "database.db")
+
+def fetch_player_fouls_and_minutes():
+    """Fetch fouls committed on players and their total minutes played"""
+    conn = sqlite3.connect(db_path)
+    
+    # Query to count fouls on each player
+    fouls_query = """
+    SELECT p.first_name || ' ' || p.last_name AS player_name, COUNT(*) AS fouls_count
+    FROM PlayByPlay pbp
+    JOIN Players p ON pbp.player_id = p.json_player_id AND pbp.game_id = p.game_id
+    WHERE pbp.action_type = 'foulon'
+    GROUP BY player_name
+    """
+    
+    # Query to sum minutes played by each player
+    minutes_query = """
+    SELECT first_name || ' ' || last_name AS player_name, minutes_played, game_id
+    FROM Players
+    """
+    
+    # Execute queries
+    fouls_df = pd.read_sql_query(fouls_query, conn)
+    minutes_df = pd.read_sql_query(minutes_query, conn)
+    
+    conn.close()
+    
+    # Process minutes data - convert from MM:SS format to decimal minutes
+    def convert_minutes(time_str):
+        if pd.isna(time_str) or time_str == '':
+            return 0
+        parts = time_str.split(':')
+        if len(parts) == 2:
+            return int(parts[0]) + int(parts[1])/60
+        return 0
+    
+    minutes_df['minutes_decimal'] = minutes_df['minutes_played'].apply(convert_minutes)
+    
+    # Sum minutes by player across all games
+    total_minutes = minutes_df.groupby('player_name')['minutes_decimal'].sum().reset_index()
+    
+    # Merge fouls and minutes data
+    result = pd.merge(fouls_df, total_minutes, on='player_name', how='outer')
+    result.fillna({'fouls_count': 0, 'minutes_decimal': 0}, inplace=True)
+    
+    return result
+
+def display_player_fouls_analysis():
+    """Display visualization of fouls vs minutes played"""
+    st.title("Player Fouls Analysis")
+    st.subheader("Analysis of fouls committed on players vs. minutes played")
+    
+    # Fetch data
+    data = fetch_player_fouls_and_minutes()
+    
+    # Create player dropdown
+    all_players = sorted(data['player_name'].unique())
+    selected_players = st.multiselect("Select players to display:", all_players)
+    
+    if selected_players:
+        # Filter data
+        filtered_data = data[data['player_name'].isin(selected_players)]
+        
+        # Create scatter plot
+        fig, ax = plt.subplots(figsize=(10, 6))
+        scatter = ax.scatter(filtered_data['fouls_count'], filtered_data['minutes_decimal'])
+        
+        # Add labels for each point
+        for _, row in filtered_data.iterrows():
+            ax.annotate(row['player_name'], 
+                        (row['fouls_count'], row['minutes_decimal']),
+                        xytext=(5, 5), 
+                        textcoords='offset points')
+        
+        ax.set_xlabel('Number of Fouls Committed on Player')
+        ax.set_ylabel('Total Minutes Played')
+        ax.set_title('Fouls Committed on Players vs Minutes Played')
+        ax.grid(True)
+        
+        # Show plot
+        st.pyplot(fig)
+        
+        # Show data table
+        st.subheader("Selected Player Data")
+        display_df = filtered_data[['player_name', 'fouls_count', 'minutes_decimal']].copy()
+        display_df.columns = ['Player', 'Fouls On Player', 'Minutes Played']
+        st.dataframe(display_df)
+    else:
+        st.info("Please select one or more players to display the analysis")
 
 def main():
     st.title("🏀 Basketball Stats Viewer")
@@ -8725,6 +8820,7 @@ def main():
     # ... rest of your main function ...
     elif page == "Shooting Foul Analysis":
         display_shooting_fouls_analysis()
+        display_player_fouls_analysis()
     elif page == "Team Lineup Analysis":
         display_team_analysis()
     elif page == "Four Factors":

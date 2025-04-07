@@ -8771,50 +8771,61 @@ def display_player_fouls_analysis():
     selected_players = st.multiselect("Select players to display:", all_players, default=default_selection)
     
     if selected_players:
-        # Filter data
+        # Filter data and remove players with no minutes played
         filtered_data = data[data['player_name'].isin(selected_players)]
-        
-        # Create scatter plot with inverted axes (minutes on x-axis, fouls on y-axis)
-        fig, ax = plt.subplots(figsize=(10, 6))
-        scatter = ax.scatter(filtered_data['minutes_decimal'], filtered_data['fouls_count'])
-        
-        # Add labels for each point
-        for _, row in filtered_data.iterrows():
-            ax.annotate(row['player_name'], 
-                        (row['minutes_decimal'], row['fouls_count']),
-                        xytext=(5, 5), 
-                        textcoords='offset points')
-        
-        # Calculate and add mean line
-        # Filter out players with no minutes to avoid division by zero
         valid_data = filtered_data[filtered_data['minutes_decimal'] > 0]
+        
         if not valid_data.empty:
-            # Calculate mean fouls per minute
+            fig, ax = plt.subplots(figsize=(10, 6))
+            
+            # Plot the scatter points
+            scatter = ax.scatter(valid_data['minutes_decimal'], valid_data['fouls_count'])
+            
+            # Add labels for each point
+            for _, row in valid_data.iterrows():
+                ax.annotate(row['player_name'], 
+                            (row['minutes_decimal'], row['fouls_count']),
+                            xytext=(5, 5), 
+                            textcoords='offset points')
+            
+            # Set appropriate axis ranges
+            min_minutes = valid_data['minutes_decimal'].min() * 0.9  # Give 10% padding
+            max_minutes = valid_data['minutes_decimal'].max() * 1.1
+            min_fouls = valid_data['fouls_count'].min() * 0.9
+            max_fouls = valid_data['fouls_count'].max() * 1.1
+            
+            # Ensure minimal values for visualization
+            min_minutes = max(0, min_minutes)
+            min_fouls = max(0, min_fouls)
+            
+            ax.set_xlim(min_minutes, max_minutes)
+            ax.set_ylim(min_fouls, max_fouls)
+            
+            # Calculate and add mean line using only the valid data points range
             mean_fouls_per_minute = valid_data['fouls_count'].sum() / valid_data['minutes_decimal'].sum()
             
-            # Get max minutes for line plotting
-            max_minutes = filtered_data['minutes_decimal'].max()
-            
-            # Plot mean line
-            x_line = np.array([0, max_minutes])
+            # Plot mean line across the visible area of the chart
+            x_line = np.array([min_minutes, max_minutes])
             y_line = mean_fouls_per_minute * x_line
-            ax.plot(x_line, y_line, 'r--', label=f'Mean Fouls/Min: {mean_fouls_per_minute:.3f}')
+            ax.plot(x_line, y_line, 'r--', label=f'Mean Fouls/Min: {mean_fouls_per_minute:.4f}')
             ax.legend()
-        
-        ax.set_xlabel('Total Minutes Played')
-        ax.set_ylabel('Number of Fouls Committed on Player')
-        ax.set_title('Minutes Played vs Fouls Committed on Players')
-        ax.grid(True)
-        
-        # Show plot
-        st.pyplot(fig)
-        
-        # Show data table
-        st.subheader("Selected Player Data")
-        display_df = filtered_data[['player_name', 'team_name', 'minutes_decimal', 'fouls_count', 'fouls_per_40']].copy()
-        display_df.columns = ['Player', 'Team', 'Minutes Played', 'Fouls On Player', 'Fouls per 40 minutes']
-        display_df = display_df.sort_values(by='Fouls per 40 minutes', ascending=False)
-        st.dataframe(display_df)
+            
+            ax.set_xlabel('Total Minutes Played')
+            ax.set_ylabel('Number of Fouls Committed on Player')
+            ax.set_title('Minutes Played vs Fouls Committed on Players')
+            ax.grid(True)
+            
+            # Show plot
+            st.pyplot(fig)
+            
+            # Show data table
+            st.subheader("Selected Player Data")
+            display_df = filtered_data[['player_name', 'team_name', 'minutes_decimal', 'fouls_count', 'fouls_per_40']].copy()
+            display_df.columns = ['Player', 'Team', 'Minutes Played', 'Fouls On Player', 'Fouls per 40 minutes']
+            display_df = display_df.sort_values(by='Fouls per 40 minutes', ascending=False)
+            st.dataframe(display_df)
+        else:
+            st.warning("No data points with valid minutes played found for the selected players.")
     else:
         st.info("Please select one or more players to display the analysis")
 def main():

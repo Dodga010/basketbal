@@ -9032,8 +9032,30 @@ def main():
 
     elif page == "Five Player Segments":
         display_five_player_segments()
-        if st.sidebar.button("Finals Preparation"):
-            finals_preparation_page()
+        if 'current_page' not in st.session_state:
+        st.session_state.current_page = 'home'  # Default page
+    
+    # Sidebar navigation
+    st.sidebar.title("Navigation")
+    
+    # Navigation buttons
+    if st.sidebar.button("Home"):
+        st.session_state.current_page = 'home'
+    
+    if st.sidebar.button("Finals Preparation"):
+        st.session_state.current_page = 'finals_prep'
+    
+    # Add your other navigation buttons here...
+    
+    # Display the selected page based on session state
+    if st.session_state.current_page == 'home':
+        # Your existing home page code
+        pass
+        
+    elif st.session_state.current_page == 'finals_prep':
+        # Import the finals preparation function
+        from finals_preparation import display_finals_preparation
+        display_finals_preparation()
     # ... rest of your main function ...
     elif page == "Shooting Foul Analysis":
         display_shooting_fouls_analysis()

@@ -3456,22 +3456,19 @@ def analyze_five_player_segments(game_id):
 def display_five_player_segments():
     st.title("Five Player Segment Analysis")
     
-    # Direct team name input instead of dropdown
-    selected_team = st.text_input("Enter team name:", "")
+    # Get list of teams for dropdown
+    teams = get_teams()
+    if not teams:
+        st.error("No teams found in the database.")
+        return
     
-    # Fetch matches only when a team name is provided
+    # Create team selection dropdown
+    selected_team = st.selectbox("Select a team:", teams)
+    
+    # Fetch matches for the selected team
     if selected_team:
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
-        
-        # First check if the team exists
-        cursor.execute("SELECT team_id FROM teams WHERE team_name = ?", (selected_team,))
-        team_exists = cursor.fetchone()
-        
-        if not team_exists:
-            st.error(f"Team '{selected_team}' not found. Please check the team name.")
-            conn.close()
-            return
         
         # Get matches where selected team participated
         cursor.execute("""

@@ -3456,19 +3456,22 @@ def analyze_five_player_segments(game_id):
 def display_five_player_segments():
     st.title("Five Player Segment Analysis")
     
-    # Get list of teams for dropdown
-    teams = get_teams()
-    if not teams:
-        st.error("No teams found in the database.")
-        return
+    # Direct team name input instead of dropdown
+    selected_team = st.text_input("Enter team name:", "")
     
-    # Create team selection dropdown
-    selected_team = st.selectbox("Select a team:", teams)
-    
-    # Fetch matches for the selected team
+    # Fetch matches only when a team name is provided
     if selected_team:
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
+        
+        # First check if the team exists
+        cursor.execute("SELECT team_id FROM teams WHERE team_name = ?", (selected_team,))
+        team_exists = cursor.fetchone()
+        
+        if not team_exists:
+            st.error(f"Team '{selected_team}' not found. Please check the team name.")
+            conn.close()
+            return
         
         # Get matches where selected team participated
         cursor.execute("""
@@ -3514,19 +3517,27 @@ def display_five_player_segments():
             # Call the analysis function with the selected game_id
             lineup_data = analyze_five_player_segments(selected_game_id)
             
-            if lineup_data:
+            if lineup_data is not None and not lineup_data.empty:
                 st.subheader("Lineup Performance")
                 st.dataframe(lineup_data)
                 
                 # Add visualization for lineup performance
-                if not lineup_data.empty:
-                    st.subheader("Net Rating by Lineup")
-                    
-                    # You can add more visualizations here
-                    fig = px.bar(lineup_data, x='lineup', y='net_rating', 
-                                 color='net_rating', 
-                                 color_continuous_scale=['red', 'yellow', 'green'])
-                    st.plotly_chart(fig)
+                st.subheader("Net Rating by Lineup")
+                
+                # Create a bar chart of net rating by lineup
+                fig = px.bar(lineup_data, x='lineup', y='net_rating', 
+                             color='net_rating', 
+                             color_continuous_scale=['red', 'yellow', 'green'],
+                             title=f"Lineup Performance for {selected_team}")
+                
+                # Improve readability
+                fig.update_layout(
+                    xaxis_title="Lineup",
+                    yaxis_title="Net Rating",
+                    xaxis_tickangle=-45
+                )
+                
+                st.plotly_chart(fig)
             else:
                 st.warning("No lineup data available for this game.")
 

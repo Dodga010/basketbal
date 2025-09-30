@@ -9107,6 +9107,7 @@ def prematch_help_tab():
     teams = fetch_teams()
     selected_team = st.selectbox("Select Team", teams)
     if selected_team:
+        # Summary info as before
         games, stats = get_team_prematch_info(selected_team)
         st.subheader("Recent Results")
         st.dataframe(games)
@@ -9119,10 +9120,11 @@ def prematch_help_tab():
                 data=pdf_bytes,
                 file_name=f"Prematch_Help_{selected_team}.pdf",
                 mime="application/pdf"
-			)
-	  st.header(f"Player Stats and Shot Charts: {selected_team}")
-      player_names = fetch_team_players(selected_team)
-      for player in player_names:
+            )
+        # --- NEW: Show players with stats and shot charts ---
+        st.header(f"Player Stats and Shot Charts: {selected_team}")
+        player_names = fetch_team_players(selected_team)
+        for player in player_names:
             st.markdown(f"### {player}")
             col1, col2 = st.columns([1, 1])
             with col1:

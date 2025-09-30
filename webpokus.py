@@ -8983,7 +8983,73 @@ def fetch_teams():
     teams = pd.read_sql_query(query, conn)["name"].tolist()
     conn.close()
     return teams
+def fetch_team_players(team_name):
+    conn = sqlite3.connect(db_path)
+    query = """
+    SELECT DISTINCT first_name || ' ' || last_name AS player_name
+    FROM Players p
+    JOIN Teams t ON p.game_id = t.game_id AND p.team_id = t.tm
+    WHERE t.name = ?
+    """
+    players = pd.read_sql_query(query, conn, params=(team_name,))["player_name"].tolist()
+    conn.close()
+    return players
 
+def fetch_player_stats(player_name):
+    # Your existing stats query, or use what's in your shot chart page
+    conn = sqlite3.connect(db_path)
+    query = """
+    SELECT
+        SUM(points) as PTS,
+        SUM(field_goals_made) as FGM,
+        SUM(field_goals_attempted) as FGA,
+        ROUND(SUM(field_goals_made) * 100.0 / NULLIF(SUM(field_goals_attempted), 0), 1) as FG_PCT,
+        SUM(three_pointers_made) as 3PM,
+        SUM(three_pointers_attempted) as 3PA,
+        ROUND(SUM(three_pointers_made) * 100.0 / NULLIF(SUM(three_pointers_attempted), 0), 1) as 3P_PCT,
+        SUM(rebounds_total) as REB,
+        SUM(assists) as AST,
+        SUM(steals) as STL,
+        SUM(blocks) as BLK,
+        SUM(turnovers) as TO
+    FROM Players
+    WHERE first_name || ' ' || last_name = ?
+    """
+    df = pd.read_sql_query(query, conn, params=(player_name,))
+    conn.close()
+    return df
+
+def fetch_shot_data(player_name):
+    conn = sqlite3.connect(db_path)
+    query = """
+    SELECT x_coord, y_coord, shot_result
+    FROM Shots 
+    WHERE player_name = ?;
+    """
+    df_shots = pd.read_sql_query(query, conn, params=(player_name,))
+    conn.close()
+    return df_shots
+
+def plot_shot_chart(df_shots, player_name):
+    import matplotlib.pyplot as plt
+    import os
+    fig, ax = plt.subplots(figsize=(5, 5))
+    if os.path.exists("fiba_courtonly.jpg"):
+        import matplotlib.image as mpimg
+        court_img = mpimg.imread("fiba_courtonly.jpg")
+        ax.imshow(court_img, extent=[0, 280, 0, 261], aspect="auto")
+        df_shots['x_scaled'] = df_shots['x_coord'] * 2.8
+        df_shots['y_scaled'] = df_shots['y_coord'] * 2.61
+        made = df_shots[df_shots['shot_result'] == 1]
+        missed = df_shots[df_shots['shot_result'] == 0]
+        ax.scatter(made['x_scaled'], made['y_scaled'], c='green', s=30, label='Made', alpha=0.7)
+        ax.scatter(missed['x_scaled'], missed['y_scaled'], c='red', s=30, label='Missed', alpha=0.7)
+        ax.set_title(f"{player_name} Shot Chart")
+        ax.axis('off')
+    else:
+        ax.scatter(df_shots['x_coord'], df_shots['y_coord'], c=df_shots['shot_result'].map({1:'green', 0:'red'}), s=30)
+        ax.set_title(f"{player_name} Shot Chart")
+    return fig
 def get_team_prematch_info(team_name):
     # Example: Fetch last 5 games, team strengths, key players, etc.
     conn = sqlite3.connect(db_path)
@@ -9054,7 +9120,21 @@ def prematch_help_tab():
                 file_name=f"Prematch_Help_{selected_team}.pdf",
                 mime="application/pdf"
             )
-
+	st.header(f"Player Stats and Shot Charts: {selected_team}")
+        player_names = fetch_team_players(selected_team)
+        for player in player_names:
+            st.markdown(f"#### {player}")
+            col1, col2 = st.columns([1, 1])
+            with col1:
+                stats_df = fetch_player_stats(player)
+                st.dataframe(stats_df)
+            with col2:
+                shot_df = fetch_shot_data(player)
+                if not shot_df.empty:
+                    fig = plot_shot_chart(shot_df, player)
+                    st.pyplot(fig)
+                else:
+                    st.info("No shot data available for this player.")
 def main():
     st.title("🏀 Basketball Stats Viewer")
     page = st.sidebar.selectbox("📌 Choose a page", ["Team Season Boxscore", "Prematch Help", "Shot Chart","Match report", "Four Factors", "Lebron", "Play by Play", "Match Detail", "Five Player Segments", "Team Lineup Analysis", "Shooting Foul Analysis"])

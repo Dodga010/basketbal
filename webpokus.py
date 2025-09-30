@@ -9121,8 +9121,8 @@ def prematch_help_tab():
                 mime="application/pdf"
 			)
 	  st.header(f"Player Stats and Shot Charts: {selected_team}")
-        player_names = fetch_team_players(selected_team)
-        for player in player_names:
+      player_names = fetch_team_players(selected_team)
+      for player in player_names:
             st.markdown(f"### {player}")
             col1, col2 = st.columns([1, 1])
             with col1:

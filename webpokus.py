@@ -9128,9 +9128,6 @@ def main():
                 # 🏀 Add Full Game Score Progression Chart
                 st.subheader(f"📈 Score Lead Progression - Full Game")
                 plot_score_lead_full_game(selected_game_id)
-
-	elif page == "Prematch Help":
-        display_prematch_help()
     elif page == "Five Player Segments":
         display_five_player_segments()
     # ... rest of your main function ...
@@ -9139,6 +9136,8 @@ def main():
         display_player_fouls_analysis()
     elif page == "Team Lineup Analysis":
         display_team_analysis()
+	elif page == "Prematch Help":
+        display_prematch_help()
     elif page == "Four Factors":
         df = fetch_team_data()
         if df.empty:

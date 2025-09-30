@@ -9119,22 +9119,21 @@ def prematch_help_tab():
                 data=pdf_bytes,
                 file_name=f"Prematch_Help_{selected_team}.pdf",
                 mime="application/pdf"
-            )
-	st.header(f"Player Stats and Shot Charts: {selected_team}")
-        player_names = fetch_team_players(selected_team)
-        for player in player_names:
-            st.markdown(f"#### {player}")
-            col1, col2 = st.columns([1, 1])
-            with col1:
-                stats_df = fetch_player_stats(player)
-                st.dataframe(stats_df)
-            with col2:
-                shot_df = fetch_shot_data(player)
-                if not shot_df.empty:
-                    fig = plot_shot_chart(shot_df, player)
-                    st.pyplot(fig)
-                else:
-                    st.info("No shot data available for this player.")
+	  st.header(f"Player Stats and Shot Charts: {selected_team}")
+	    player_names = fetch_team_players(selected_team)
+	    for player in player_names:
+	                st.markdown(f"#### {player}")
+	                col1, col2 = st.columns([1, 1])
+	                with col1:
+	                    stats_df = fetch_player_stats(player)
+	                    st.dataframe(stats_df)
+	                with col2:
+	                    shot_df = fetch_shot_data(player)
+	                    if not shot_df.empty:
+	                        fig = plot_shot_chart(shot_df, player)
+	                        st.pyplot(fig)
+	                    else:
+	                        st.info("No shot data available for this player.")
 def main():
     st.title("🏀 Basketball Stats Viewer")
     page = st.sidebar.selectbox("📌 Choose a page", ["Team Season Boxscore", "Prematch Help", "Shot Chart","Match report", "Four Factors", "Lebron", "Play by Play", "Match Detail", "Five Player Segments", "Team Lineup Analysis", "Shooting Foul Analysis"])

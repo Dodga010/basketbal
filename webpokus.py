@@ -16,7 +16,6 @@ import os
 from collections import defaultdict
 from itertools import combinations
 import pdfkit  # you may need to install this
-import tempfile
 
 # ✅ Define SQLite database path (works locally & online)
 db_path = os.path.join(os.path.dirname(__file__), "database.db")

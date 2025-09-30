@@ -6,4 +6,4 @@ matplotlib
 plotly
 scipy
 wkhtmltopdf
-pdfkit 
+

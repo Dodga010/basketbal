@@ -5,4 +5,6 @@ seaborn
 matplotlib
 plotly
 scipy
+tempfile
 pdfkit 
+

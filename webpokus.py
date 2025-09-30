@@ -9136,7 +9136,7 @@ def main():
         display_player_fouls_analysis()
     elif page == "Team Lineup Analysis":
         display_team_analysis()
-	elif page == "Prematch Help":
+    elif page == "Prematch Help":
         display_prematch_help()
     elif page == "Four Factors":
         df = fetch_team_data()

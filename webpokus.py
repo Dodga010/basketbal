@@ -9000,20 +9000,20 @@ def fetch_player_stats(player_name):
     conn = sqlite3.connect(db_path)
     query = """
     SELECT
-        SUM(points) as PTS,
-        SUM(field_goals_made) as FGM,
-        SUM(field_goals_attempted) as FGA,
-        ROUND(SUM(field_goals_made) * 100.0 / NULLIF(SUM(field_goals_attempted), 0), 1) as FG_PCT,
-        SUM(three_pointers_made) as 3PM,
-        SUM(three_pointers_attempted) as 3PA,
-        ROUND(SUM(three_pointers_made) * 100.0 / NULLIF(SUM(three_pointers_attempted), 0), 1) as 3P_PCT,
-        SUM(rebounds_total) as REB,
-        SUM(assists) as AST,
-        SUM(steals) as STL,
-        SUM(blocks) as BLK,
-        SUM(turnovers) as TO
-    FROM Players
-    WHERE first_name || ' ' || last_name = ?
+    	SUM(points) as Points,
+    	SUM(field_goals_made) as FGM,
+    	SUM(field_goals_attempted) as FGA,
+    	ROUND(SUM(field_goals_made) * 100.0 / NULLIF(SUM(field_goals_attempted), 0), 1) as FG_PCT,
+    	SUM(three_pointers_made) as ThreePM,
+    	SUM(three_pointers_attempted) as ThreePA,
+    	ROUND(SUM(three_pointers_made) * 100.0 / NULLIF(SUM(three_pointers_attempted), 0), 1) as ThreeP_PCT,
+    	SUM(rebounds_total) as Rebounds,
+    	SUM(assists) as Assists,
+    	SUM(steals) as Steals,
+    	SUM(blocks) as Blocks,
+    	SUM(turnovers) as Turnovers
+	FROM Players
+	WHERE first_name || ' ' || last_name = ?
     """
     df = pd.read_sql_query(query, conn, params=(player_name,))
     conn.close()

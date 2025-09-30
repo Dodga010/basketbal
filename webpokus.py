@@ -8975,9 +8975,116 @@ def display_player_fouls_analysis():
             st.warning(f"No data points with valid minutes played found for the selected players{' and shooting fouls filter' if shooting_fouls_only else ''}.")
     else:
         st.info("Please select one or more players to display the analysis")
+
+def fetch_team_recent_games(team_name, limit=5):
+    db_path = os.path.join(os.path.dirname(__file__), "database.db")
+    conn = sqlite3.connect(db_path)
+    query = """
+    SELECT t1.game_id, t2.name as opponent, 
+           (t1.p1_score + t1.p2_score + t1.p3_score + t1.p4_score) as team_score, 
+           (t2.p1_score + t2.p2_score + t2.p3_score + t2.p4_score) as opponent_score,
+           t1.field_goal_percentage, t1.three_point_percentage, t1.rebounds_total, t1.assists, t1.turnovers
+    FROM Teams t1
+    JOIN Teams t2 ON t1.game_id = t2.game_id AND t2.name != t1.name
+    WHERE t1.name = ?
+    ORDER BY t1.game_id DESC
+    LIMIT ?
+    """
+    df = pd.read_sql_query(query, conn, params=(team_name, limit))
+    conn.close()
+    return df
+
+def fetch_team_strengths(team_name):
+    # This can be expanded for deeper scouting
+    db_path = os.path.join(os.path.dirname(__file__), "database.db")
+    conn = sqlite3.connect(db_path)
+    query = """
+    SELECT AVG(field_goal_percentage) as avg_fg_pct,
+           AVG(three_point_percentage) as avg_3p_pct,
+           AVG(rebounds_total) as avg_rebounds,
+           AVG(assists) as avg_assists,
+           AVG(turnovers) as avg_turnovers
+    FROM Teams WHERE name = ?
+    """
+    df = pd.read_sql_query(query, conn, params=(team_name,))
+    conn.close()
+    return df.iloc[0] if not df.empty else None
+
+def display_prematch_help():
+    st.title("📋 Prematch Help: Team Scouting & Preparation")
+    teams = fetch_teams()
+    team = st.selectbox("Select your team", teams)
+    opponents = [t for t in teams if t != team]
+    opponent = st.selectbox("Select opponent", opponents)
+
+    st.subheader(f"Recent Form: {team}")
+    recent_games = fetch_team_recent_games(team)
+    if not recent_games.empty:
+        st.dataframe(recent_games)
+        wins = (recent_games['team_score'] > recent_games['opponent_score']).sum()
+        losses = (recent_games['team_score'] < recent_games['opponent_score']).sum()
+        st.metric("Last 5 Games", f"{wins}W - {losses}L")
+    else:
+        st.info("No recent games found.")
+
+    st.subheader(f"Team Strengths and Weaknesses")
+    strengths = fetch_team_strengths(team)
+    if strengths is not None:
+        st.write(f"**Field Goal %:** {strengths['avg_fg_pct']:.1f}")
+        st.write(f"**Three Point %:** {strengths['avg_3p_pct']:.1f}")
+        st.write(f"**Rebounds:** {strengths['avg_rebounds']:.1f}")
+        st.write(f"**Assists:** {strengths['avg_assists']:.1f}")
+        st.write(f"**Turnovers:** {strengths['avg_turnovers']:.1f}")
+
+        # Simple suggestions based on stats
+        suggestions = []
+        if strengths['avg_3p_pct'] > 35:
+            suggestions.append("Your team is strong from 3PT range. Consider running plays for open threes.")
+        if strengths['avg_rebounds'] > 35:
+            suggestions.append("Strong rebounding team – crash the boards aggressively.")
+        if strengths['avg_turnovers'] > 15:
+            suggestions.append("High turnovers detected. Focus on ball security.")
+        if not suggestions:
+            suggestions.append("Team profile is balanced. Play to your strengths.")
+
+        st.subheader("Suggested Focus:")
+        for tip in suggestions:
+            st.write(f"• {tip}")
+
+    st.subheader(f"Head-to-Head vs {opponent}")
+    h2h_query = """
+    SELECT t1.game_id, 
+           (t1.p1_score + t1.p2_score + t1.p3_score + t1.p4_score) as team_score,
+           (t2.p1_score + t2.p2_score + t2.p3_score + t2.p4_score) as opponent_score
+    FROM Teams t1
+    JOIN Teams t2 ON t1.game_id = t2.game_id AND t2.name = ?
+    WHERE t1.name = ?
+    ORDER BY t1.game_id DESC
+    """
+    db_path = os.path.join(os.path.dirname(__file__), "database.db")
+    conn = sqlite3.connect(db_path)
+    h2h_df = pd.read_sql_query(h2h_query, conn, params=(opponent, team))
+    conn.close()
+    if not h2h_df.empty:
+        st.dataframe(h2h_df)
+        h2h_wins = (h2h_df['team_score'] > h2h_df['opponent_score']).sum()
+        h2h_losses = (h2h_df['team_score'] < h2h_df['opponent_score']).sum()
+        st.metric("Head-to-Head", f"{h2h_wins}W - {h2h_losses}L")
+    else:
+        st.info("No head-to-head games found.")
+
+    st.subheader("Prematch Checklist")
+    st.markdown("""
+    - Review opponent's recent games
+    - Discuss defensive matchups
+    - Confirm starting lineup
+    - Set tactical priorities (e.g., defend 3PT, attack paint)
+    - Remind players about foul discipline & ball security
+    """)
+
 def main():
     st.title("🏀 Basketball Stats Viewer")
-    page = st.sidebar.selectbox("📌 Choose a page", ["Team Season Boxscore", "Shot Chart","Match report", "Four Factors", "Lebron", "Play by Play", "Match Detail", "Five Player Segments", "Team Lineup Analysis", "Shooting Foul Analysis"])
+    page = st.sidebar.selectbox("📌 Choose a page", ["Team Season Boxscore", "Shot Chart","Match report", "Four Factors", "Lebron", "Play by Play", "Match Detail", "Five Player Segments", "Team Lineup Analysis", "Shooting Foul Analysis", "Prematch Help"])
 
     if page == "Match Detail":
         display_match_detail()
@@ -9022,7 +9129,8 @@ def main():
                 st.subheader(f"📈 Score Lead Progression - Full Game")
                 plot_score_lead_full_game(selected_game_id)
 
-
+	elif page == "Prematch Help":
+        display_prematch_help()
     elif page == "Five Player Segments":
         display_five_player_segments()
     # ... rest of your main function ...

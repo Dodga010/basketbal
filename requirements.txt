@@ -5,6 +5,5 @@ seaborn
 matplotlib
 plotly
 scipy
-tempfile
+wkhtmltopdf
 pdfkit 
-

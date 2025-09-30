@@ -15,8 +15,7 @@ from datetime import datetime
 import os
 from collections import defaultdict
 from itertools import combinations
-import pdfkit
-import tempfile
+from fpdf import FPDF
 
 # ✅ Define SQLite database path (works locally & online)
 db_path = os.path.join(os.path.dirname(__file__), "database.db")
@@ -8978,94 +8977,87 @@ def display_player_fouls_analysis():
     else:
         st.info("Please select one or more players to display the analysis")
 
-def fetch_team_recent_games(team_name, limit=5):
-    db_path = os.path.join(os.path.dirname(__file__), "database.db")
+def fetch_teams():
     conn = sqlite3.connect(db_path)
-    query = """
-    SELECT t1.game_id, t2.name as opponent, 
-           (t1.p1_score + t1.p2_score + t1.p3_score + t1.p4_score) as team_score, 
-           (t2.p1_score + t2.p2_score + t2.p3_score + t2.p4_score) as opponent_score,
-           t1.field_goal_percentage, t1.three_point_percentage, t1.rebounds_total, t1.assists, t1.turnovers
+    query = "SELECT DISTINCT name FROM Teams ORDER BY name;"
+    teams = pd.read_sql_query(query, conn)["name"].tolist()
+    conn.close()
+    return teams
+
+def get_team_prematch_info(team_name):
+    # Example: Fetch last 5 games, team strengths, key players, etc.
+    conn = sqlite3.connect(db_path)
+    games_query = f"""
+    SELECT t1.game_id, t2.name AS opponent, (t1.p1_score + t1.p2_score + t1.p3_score + t1.p4_score) AS team_score,
+           (t2.p1_score + t2.p2_score + t2.p3_score + t2.p4_score) AS opponent_score
     FROM Teams t1
-    JOIN Teams t2 ON t1.game_id = t2.game_id AND t2.name != t1.name
+    JOIN Teams t2 ON t1.game_id = t2.game_id AND t1.tm != t2.tm
     WHERE t1.name = ?
     ORDER BY t1.game_id DESC
-    LIMIT ?
+    LIMIT 5;
     """
-    df = pd.read_sql_query(query, conn, params=(team_name, limit))
-    conn.close()
-    return df
-
-def fetch_team_strengths(team_name):
-    # This can be expanded for deeper scouting
-    db_path = os.path.join(os.path.dirname(__file__), "database.db")
-    conn = sqlite3.connect(db_path)
-    query = """
-    SELECT AVG(field_goal_percentage) as avg_fg_pct,
-           AVG(three_point_percentage) as avg_3p_pct,
-           AVG(rebounds_total) as avg_rebounds,
-           AVG(assists) as avg_assists,
-           AVG(turnovers) as avg_turnovers
-    FROM Teams WHERE name = ?
+    games = pd.read_sql_query(games_query, conn, params=(team_name,))
+    # Example: Fetch average stats
+    stats_query = """
+    SELECT AVG(p1_score + p2_score + p3_score + p4_score) AS avg_points, AVG(field_goal_percentage) AS avg_fg_pct,
+           AVG(three_point_percentage) AS avg_3p_pct, AVG(rebounds_total) AS avg_rebounds
+    FROM Teams WHERE name = ?;
     """
-    df = pd.read_sql_query(query, conn, params=(team_name,))
+    stats = pd.read_sql_query(stats_query, conn, params=(team_name,)).iloc[0]
     conn.close()
-    return df.iloc[0] if not df.empty else None
+    return games, stats
 
-def display_prematch_help():
+def make_prematch_pdf(team_name, games, stats):
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", "B", 16)
+    pdf.cell(0, 10, f"Prematch Help for {team_name}", ln=True, align='C')
+    pdf.set_font("Arial", "", 12)
+    pdf.cell(0, 10, f"Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC", ln=True)
+    pdf.ln(5)
+    pdf.set_font("Arial", "B", 14)
+    pdf.cell(0, 10, "Team Recent Form:", ln=True)
+    pdf.set_font("Arial", "", 12)
+    for idx, row in games.iterrows():
+        result = "Win" if row['team_score'] > row['opponent_score'] else "Loss"
+        pdf.cell(0, 8, f"Game {row['game_id']}: vs {row['opponent']} - {row['team_score']}:{row['opponent_score']} ({result})", ln=True)
+    pdf.ln(4)
+    pdf.set_font("Arial", "B", 14)
+    pdf.cell(0, 10, "Season Averages:", ln=True)
+    pdf.set_font("Arial", "", 12)
+    pdf.cell(0, 8, f"Points: {stats['avg_points']:.1f}", ln=True)
+    pdf.cell(0, 8, f"FG%: {stats['avg_fg_pct']:.1f}%", ln=True)
+    pdf.cell(0, 8, f"3P%: {stats['avg_3p_pct']:.1f}%", ln=True)
+    pdf.cell(0, 8, f"Rebounds: {stats['avg_rebounds']:.1f}", ln=True)
+    pdf.ln(5)
+    pdf.set_font("Arial", "B", 13)
+    pdf.cell(0, 9, "Prematch Tips:", ln=True)
+    pdf.set_font("Arial", "", 12)
+    pdf.multi_cell(0, 8, "- Focus on rebounding against strong opponents.\n- Watch for opponent's 3-point shooters.\n- Use recent form to guide substitutions.")
+    return pdf.output(dest='S').encode('latin1')
+
+def prematch_help_tab():
+    st.header("📝 Prematch Help for Teams")
     teams = fetch_teams()
-    team = st.selectbox("Select your team", teams)
-    opponents = [t for t in teams if t != team]
-    opponent = st.selectbox("Select opponent", opponents)
+    selected_team = st.selectbox("Select Team", teams)
+    if selected_team:
+        games, stats = get_team_prematch_info(selected_team)
+        st.subheader("Recent Results")
+        st.dataframe(games)
+        st.subheader("Season Averages")
+        st.write(stats)
+        if st.button("Generate Prematch PDF"):
+            pdf_bytes = make_prematch_pdf(selected_team, games, stats)
+            st.download_button(
+                label="Download PDF",
+                data=pdf_bytes,
+                file_name=f"Prematch_Help_{selected_team}.pdf",
+                mime="application/pdf"
+            )
 
-    recent_games = fetch_team_recent_games(team)
-    strengths = fetch_team_strengths(team)
-
-    h2h_query = """
-    SELECT t1.game_id, 
-           (t1.p1_score + t1.p2_score + t1.p3_score + t1.p4_score) as team_score,
-           (t2.p1_score + t2.p2_score + t2.p3_score + t2.p4_score) as opponent_score
-    FROM Teams t1
-    JOIN Teams t2 ON t1.game_id = t2.game_id AND t2.name = ?
-    WHERE t1.name = ?
-    ORDER BY t1.game_id DESC
-    """
-    db_path = os.path.join(os.path.dirname(__file__), "database.db")
-    conn = sqlite3.connect(db_path)
-    h2h_df = pd.read_sql_query(h2h_query, conn, params=(opponent, team))
-    conn.close()
-
-    # Prepare minimal tables for PDF
-    tables = []
-    if not recent_games.empty:
-        tables.append(recent_games)
-    if strengths is not None:
-        tables.append(pd.DataFrame(strengths).T)
-    if not h2h_df.empty:
-        tables.append(h2h_df)
-
-    # Convert tables to HTML
-    html_parts = []
-    for i, df in enumerate(tables):
-        html_parts.append(df.to_html(index=False, border=1))
-
-    html_string = "<br><br>".join(html_parts)
-
-    # Generate PDF from HTML (requires wkhtmltopdf installed on server)
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmpfile:
-        pdfkit.from_string(html_string, tmpfile.name)
-        with open(tmpfile.name, "rb") as f:
-            pdf_bytes = f.read()
-
-    st.download_button(
-        label="Download Prematch Help PDF",
-        data=pdf_bytes,
-        file_name=f"{team}_prematch_help.pdf",
-        mime="application/pdf"
-    )
 def main():
     st.title("🏀 Basketball Stats Viewer")
-    page = st.sidebar.selectbox("📌 Choose a page", ["Team Season Boxscore", "Shot Chart","Match report", "Four Factors", "Lebron", "Play by Play", "Match Detail", "Five Player Segments", "Team Lineup Analysis", "Shooting Foul Analysis", "Prematch Help"])
+    page = st.sidebar.selectbox("📌 Choose a page", ["Team Season Boxscore", "Prematch Help", "Shot Chart","Match report", "Four Factors", "Lebron", "Play by Play", "Match Detail", "Five Player Segments", "Team Lineup Analysis", "Shooting Foul Analysis"])
 
     if page == "Match Detail":
         display_match_detail()
@@ -9109,6 +9101,8 @@ def main():
                 # 🏀 Add Full Game Score Progression Chart
                 st.subheader(f"📈 Score Lead Progression - Full Game")
                 plot_score_lead_full_game(selected_game_id)
+
+
     elif page == "Five Player Segments":
         display_five_player_segments()
     # ... rest of your main function ...
@@ -9117,8 +9111,8 @@ def main():
         display_player_fouls_analysis()
     elif page == "Team Lineup Analysis":
         display_team_analysis()
-    elif page == "Prematch Help":
-        display_prematch_help()
+    if page == "Prematch Help":
+        prematch_help_tab()
     elif page == "Four Factors":
         df = fetch_team_data()
         if df.empty:

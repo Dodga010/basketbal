@@ -5,6 +5,4 @@ seaborn
 matplotlib
 plotly
 scipy
-pdfkit
-
-
+fpdf

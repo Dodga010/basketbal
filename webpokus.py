@@ -9119,6 +9119,7 @@ def prematch_help_tab():
                 data=pdf_bytes,
                 file_name=f"Prematch_Help_{selected_team}.pdf",
                 mime="application/pdf"
+			)
 	  st.header(f"Player Stats and Shot Charts: {selected_team}")
         player_names = fetch_team_players(selected_team)
         for player in player_names:

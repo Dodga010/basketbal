@@ -15,6 +15,8 @@ from datetime import datetime
 import os
 from collections import defaultdict
 from itertools import combinations
+import pdfkit  # you may need to install this
+import tempfile
 
 # ✅ Define SQLite database path (works locally & online)
 db_path = os.path.join(os.path.dirname(__file__), "database.db")
@@ -9011,47 +9013,14 @@ def fetch_team_strengths(team_name):
     return df.iloc[0] if not df.empty else None
 
 def display_prematch_help():
-    st.title("📋 Prematch Help: Team Scouting & Preparation")
     teams = fetch_teams()
     team = st.selectbox("Select your team", teams)
     opponents = [t for t in teams if t != team]
     opponent = st.selectbox("Select opponent", opponents)
 
-    st.subheader(f"Recent Form: {team}")
     recent_games = fetch_team_recent_games(team)
-    if not recent_games.empty:
-        st.dataframe(recent_games)
-        wins = (recent_games['team_score'] > recent_games['opponent_score']).sum()
-        losses = (recent_games['team_score'] < recent_games['opponent_score']).sum()
-        st.metric("Last 5 Games", f"{wins}W - {losses}L")
-    else:
-        st.info("No recent games found.")
-
-    st.subheader(f"Team Strengths and Weaknesses")
     strengths = fetch_team_strengths(team)
-    if strengths is not None:
-        st.write(f"**Field Goal %:** {strengths['avg_fg_pct']:.1f}")
-        st.write(f"**Three Point %:** {strengths['avg_3p_pct']:.1f}")
-        st.write(f"**Rebounds:** {strengths['avg_rebounds']:.1f}")
-        st.write(f"**Assists:** {strengths['avg_assists']:.1f}")
-        st.write(f"**Turnovers:** {strengths['avg_turnovers']:.1f}")
 
-        # Simple suggestions based on stats
-        suggestions = []
-        if strengths['avg_3p_pct'] > 35:
-            suggestions.append("Your team is strong from 3PT range. Consider running plays for open threes.")
-        if strengths['avg_rebounds'] > 35:
-            suggestions.append("Strong rebounding team – crash the boards aggressively.")
-        if strengths['avg_turnovers'] > 15:
-            suggestions.append("High turnovers detected. Focus on ball security.")
-        if not suggestions:
-            suggestions.append("Team profile is balanced. Play to your strengths.")
-
-        st.subheader("Suggested Focus:")
-        for tip in suggestions:
-            st.write(f"• {tip}")
-
-    st.subheader(f"Head-to-Head vs {opponent}")
     h2h_query = """
     SELECT t1.game_id, 
            (t1.p1_score + t1.p2_score + t1.p3_score + t1.p4_score) as team_score,
@@ -9065,23 +9034,35 @@ def display_prematch_help():
     conn = sqlite3.connect(db_path)
     h2h_df = pd.read_sql_query(h2h_query, conn, params=(opponent, team))
     conn.close()
+
+    # Prepare minimal tables for PDF
+    tables = []
+    if not recent_games.empty:
+        tables.append(recent_games)
+    if strengths is not None:
+        tables.append(pd.DataFrame(strengths).T)
     if not h2h_df.empty:
-        st.dataframe(h2h_df)
-        h2h_wins = (h2h_df['team_score'] > h2h_df['opponent_score']).sum()
-        h2h_losses = (h2h_df['team_score'] < h2h_df['opponent_score']).sum()
-        st.metric("Head-to-Head", f"{h2h_wins}W - {h2h_losses}L")
-    else:
-        st.info("No head-to-head games found.")
+        tables.append(h2h_df)
 
-    st.subheader("Prematch Checklist")
-    st.markdown("""
-    - Review opponent's recent games
-    - Discuss defensive matchups
-    - Confirm starting lineup
-    - Set tactical priorities (e.g., defend 3PT, attack paint)
-    - Remind players about foul discipline & ball security
-    """)
+    # Convert tables to HTML
+    html_parts = []
+    for i, df in enumerate(tables):
+        html_parts.append(df.to_html(index=False, border=1))
 
+    html_string = "<br><br>".join(html_parts)
+
+    # Generate PDF from HTML (requires wkhtmltopdf installed on server)
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmpfile:
+        pdfkit.from_string(html_string, tmpfile.name)
+        with open(tmpfile.name, "rb") as f:
+            pdf_bytes = f.read()
+
+    st.download_button(
+        label="Download Prematch Help PDF",
+        data=pdf_bytes,
+        file_name=f"{team}_prematch_help.pdf",
+        mime="application/pdf"
+    )
 def main():
     st.title("🏀 Basketball Stats Viewer")
     page = st.sidebar.selectbox("📌 Choose a page", ["Team Season Boxscore", "Shot Chart","Match report", "Four Factors", "Lebron", "Play by Play", "Match Detail", "Five Player Segments", "Team Lineup Analysis", "Shooting Foul Analysis", "Prematch Help"])
